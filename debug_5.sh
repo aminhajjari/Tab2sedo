@@ -17,17 +17,15 @@
 # Paths
 # ============================================================
 
-BASE="/home/gkianfar/scratch/Amin/ICC"
+PROJECT_DIR="/home/gkianfar/scratch/Amin/Sedo"
+CODE_DIR="/home/gkianfar/scratch/Amin/Sedo/Tab2sedo"
 
-CODE="$BASE/main/V2I"
-DATA="$BASE/Unzippeddata/CSV"
-DEBUG_DATA="$BASE/debug_data"
-OUTPUT="$BASE/output/debug"
+DEBUG_DATA="/home/gkianfar/scratch/Amin/Sedo/debug_data"
 
-VENV="$BASE/venvMsc/bin/activate"
+VENV_PATH="/home/gkianfar/scratch/Amin/ICC/venvMsc/bin/activate"
 
-MAIN="$CODE/main.py"
-RUN="$CODE/run_all_datasets.py"
+BATCH_SCRIPT="$CODE_DIR/run_all_datasets.py"
+MAIN_SCRIPT="$CODE_DIR/main.py"
 
 TIMEOUT=14400
 
