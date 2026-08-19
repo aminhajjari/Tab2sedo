@@ -1165,7 +1165,7 @@ num_saved, save_dir = save_sample_images(
 # Output results as JSON to stdout (for batch script to capture)
 results = {
     'dataset': file_name,
-    'num_samples': len(X),
+    'num_samples': len(X_df),
     'num_features': n_cont_features,
     'num_classes': num_classes,
     'best_accuracy': best_accuracy,
