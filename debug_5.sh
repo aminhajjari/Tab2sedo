@@ -19,7 +19,7 @@
 PROJECT_DIR="/home/gkianfar/scratch/Amin/Sedo"
 CODE_DIR="$PROJECT_DIR/Tab2sedo"
 
-DEBUG_DATA="/home/gkianfar/scratch/Amin/Sedo/debug_data"
+DEBUG_DATA="/home/gkianfar/scratch/Amin/ICC/debug_data"
 
 OUTPUT="$PROJECT_DIR/output"
 
@@ -29,7 +29,6 @@ BATCH_SCRIPT="$CODE_DIR/run_all_datasets.py"
 MAIN_SCRIPT="$CODE_DIR/main.py"
 
 TIMEOUT=14400
-
 
 # ============================================================
 # Setup
