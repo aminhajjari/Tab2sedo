@@ -5,15 +5,15 @@
 #=======================================================================
 
 #SBATCH --account=def-arashmoh
-#SBATCH --job-name=T_VIF_PROD
+#SBATCH --job-name=Sedomain
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=h100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=96:00:00
 
-#SBATCH --output=/home/gkianfar/scratch/Amin/ICC/output/logs/tabdebug_%A.out
-#SBATCH --error=/home/gkianfar/scratch/Amin/ICC/output/logs/tabdebug_%A.err
+#SBATCH --output=/home/gkianfar/scratch/Amin/Sedo/output/logs/tSedomain_%A.out
+#SBATCH --error=/home/gkianfar/scratch/Amin/Sedo/output/logs/sudomain_%A.err
 
 #=======================================================================
 # Configuration
