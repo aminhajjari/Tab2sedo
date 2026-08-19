@@ -1068,22 +1068,25 @@ best_epoch = 0
 
 for epoch in range(1, EPOCH + 1):
     train_loss = train(
-    model,
-    train_loader,
-    optimizer,
-    epoch
-)
+        model,
+        train_loader,
+        optimizer,
+        epoch
+    )
 
-best_accuracy, best_auc, best_epoch, test_loss, tab_acc, img_acc = test(
-    model,
-    test_loader,
-    epoch,
-    best_accuracy,
-    best_auc,
-    best_epoch
-)
-    
+    best_accuracy, best_auc, best_epoch, test_loss, tab_acc, img_acc = test(
+        model,
+        test_loader,
+        epoch,
+        best_accuracy,
+        best_auc,
+        best_epoch
+    )
+
     if epoch % 10 == 0 or epoch == 1:
+        print(f"[Epoch {epoch:3d}] Train Loss: {train_loss:.4f} | "
+              f"Test Loss: {test_loss:.4f} | "
+              f"Tab Acc: {tab_acc:.2f}% | Img Acc: {img_acc:.2f}%")
         print(f"[Epoch {epoch:3d}] Train Loss: {train_loss:.4f} | "
               f"Test Loss: {test_loss:.4f} | "
               f"Tab Acc: {tab_acc:.2f}% | Img Acc: {img_acc:.2f}%")
