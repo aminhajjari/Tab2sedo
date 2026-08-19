@@ -980,7 +980,7 @@ def save_sample_images(
                 break
 
     images_base_dir = (
-        "/home/gkianfar/scratch/Amin/ICC/output/imageout"
+        "/home/gkianfar/scratch/Amin/AI/outputs/imageout"
     )
 
     images_dir = os.path.join(
