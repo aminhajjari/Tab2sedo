@@ -3,7 +3,7 @@
 #SBATCH --account=def-arashmoh
 #SBATCH --job-name=Sedo_DEBUG
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=h100:1
+#SBATCH --gpus-per-node=a100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=04:00:00
