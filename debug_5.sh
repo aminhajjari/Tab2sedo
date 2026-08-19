@@ -19,7 +19,7 @@
 PROJECT_DIR="/home/gkianfar/scratch/Amin/Sedo"
 CODE_DIR="$PROJECT_DIR/Tab2sedo"
 
-DEBUG_DATA="/home/gkianfar/scratch/Amin/ICC/debug_data"
+DEBUG_DATA="/home/gkianfar/scratch/Amin/AI/debug_data"
 
 OUTPUT="$PROJECT_DIR/output"
 
