@@ -38,6 +38,16 @@ TIMEOUT=14400
 mkdir -p "$OUTPUT"
 mkdir -p "$OUTPUT/logs"
 
+source "$VENV_PATH"
+
+echo "=============================="
+echo "Python:"
+which python
+python --version
+
+echo "=============================="
+echo "PyTorch:"
+python -c "import torch; print(torch.__version__)"
 
 # ============================================================
 # Information
