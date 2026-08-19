@@ -19,20 +19,19 @@
 # Configuration
 #=======================================================================
 
-PROJECT_DIR="/home/gkianfar/scratch/Amin/ICC"
+PROJECT_DIR="/home/gkianfar/scratch/Amin/Sedo"
 
-TAB2IMG_DIR="$PROJECT_DIR/main/V2I"
+CODE_DIR="/home/gkianfar/scratch/Amin/Sedo/Tab2sedo"
 
-DATASETS_DIR="$PROJECT_DIR/Unzippeddata/CSV"
+DATASETS_DIR="/home/gkianfar/scratch/Amin/ICC/Unzippeddata/CSV"
 
-VENV_PATH="$PROJECT_DIR/venvMsc/bin/activate"
+VENV_PATH="/home/gkianfar/scratch/Amin/ICC/venvMsc/bin/activate"
 
-BATCH_SCRIPT="$TAB2IMG_DIR/run_all_datasets.py"
-MAIN_SCRIPT="$TAB2IMG_DIR/main.py"
+BATCH_SCRIPT="$CODE_DIR/run_all_datasets.py"
+MAIN_SCRIPT="$CODE_DIR/main.py"
 
-RESULTS_BASE="$PROJECT_DIR/output"
-
-JOB_LOGS_DIR="$PROJECT_DIR/output"
+RESULTS_BASE="/home/gkianfar/scratch/Amin/Sedo/outputs/imageout"
+JOB_LOGS_DIR="/home/gkianfar/scratch/Amin/Sedo/outputs/logs"
 
 TIMEOUT_DEFAULT=14400  # 4 hours
 
