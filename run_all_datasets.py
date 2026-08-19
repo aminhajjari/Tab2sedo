@@ -48,7 +48,7 @@ def create_output_structure(base_output_dir, job_id):
         f.write(f"  csv/              - Results in CSV format\n")
         f.write(f"  latex/            - LaTeX tables for paper\n")
         f.write(f"  logs/             - Processing logs (JSONL format)\n")
-        f.write(f"\nImages saved to: /home/gkianfar/scratch/Amin/ICC/output/imageout/\n")
+        f.write(f"\nImages saved to: /home/gkianfar/scratch/Amin/AI/output/imageout/\n")
     
     return run_dir, subdirs
 
