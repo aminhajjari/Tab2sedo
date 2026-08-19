@@ -12,15 +12,16 @@
 #SBATCH --error=/home/gkianfar/scratch/Amin/Sedo/output/logs/Sedodebug_%A.err
 
 
-
 # ============================================================
 # Paths
 # ============================================================
 
 PROJECT_DIR="/home/gkianfar/scratch/Amin/Sedo"
-CODE_DIR="/home/gkianfar/scratch/Amin/Sedo/Tab2sedo"
+CODE_DIR="$PROJECT_DIR/Tab2sedo"
 
 DEBUG_DATA="/home/gkianfar/scratch/Amin/Sedo/debug_data"
+
+OUTPUT="$PROJECT_DIR/output"
 
 VENV_PATH="/home/gkianfar/scratch/Amin/ICC/venvMsc/bin/activate"
 
@@ -29,35 +30,33 @@ MAIN_SCRIPT="$CODE_DIR/main.py"
 
 TIMEOUT=14400
 
+
 # ============================================================
 # Setup
 # ============================================================
 
-mkdir -p "$DEBUG_DATA"
 mkdir -p "$OUTPUT"
+mkdir -p "$OUTPUT/logs"
 
-# Clean previous debug dataset links
-rm -rf "$DEBUG_DATA"/*
 
 # ============================================================
-# Select 5 datasets
+# Information
 # ============================================================
 
-ln -s "$DATA/Bioresponse" "$DEBUG_DATA/Bioresponse"
-ln -s "$DATA/cmc" "$DEBUG_DATA/cmc"
-ln -s "$DATA/kc2" "$DEBUG_DATA/kc2"
-ln -s "$DATA/phoneme" "$DEBUG_DATA/phoneme"
-ln -s "$DATA/spambase" "$DEBUG_DATA/spambase"
+echo "=========================================="
+echo "SEDO DEBUG RUN - 5 DATASETS"
+echo "=========================================="
 
-echo "=========================================="
-echo "V2I DEBUG RUN - 5 DATASETS"
-echo "=========================================="
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $(hostname)"
+echo "Dataset directory: $DEBUG_DATA"
 echo ""
+
 echo "Datasets:"
 ls -1 "$DEBUG_DATA"
+
 echo ""
+
 
 # ============================================================
 # Load environment
@@ -68,23 +67,26 @@ module load StdEnv/2023
 module load python/3.11
 module load cuda/12.2
 
-source "$VENV"
+source "$VENV_PATH"
 
-cd "$CODE"
+cd "$CODE_DIR"
+
 
 # ============================================================
 # Environment check
 # ============================================================
 
+echo "=========================================="
+echo "ENVIRONMENT CHECK"
+echo "=========================================="
+
 echo "Python:"
 which python
 python --version
+
 echo ""
 
-echo "GPU:"
-nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
-echo ""
-
+echo "PyTorch:"
 python -c "
 import torch
 print('PyTorch:', torch.__version__)
@@ -95,22 +97,29 @@ if torch.cuda.is_available():
 
 echo ""
 
+echo "GPU:"
+nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+
+echo ""
+
+
 # ============================================================
-# Run 5 datasets
+# Run
 # ============================================================
 
 echo "=========================================="
 echo "STARTING DEBUG RUN"
 echo "=========================================="
 
-python "$RUN" \
+python "$BATCH_SCRIPT" \
     --datasets_dir "$DEBUG_DATA" \
     --output_base "$OUTPUT" \
     --job_id "$SLURM_JOB_ID" \
-    --script_path "$MAIN" \
+    --script_path "$MAIN_SCRIPT" \
     --timeout "$TIMEOUT"
 
 EXIT_CODE=$?
+
 
 # ============================================================
 # Summary
@@ -120,9 +129,11 @@ echo ""
 echo "=========================================="
 echo "DEBUG RUN COMPLETE"
 echo "=========================================="
+
 echo "Finished: $(date)"
 echo "Exit code: $EXIT_CODE"
 echo "Results: $OUTPUT"
+
 echo "=========================================="
 
 exit $EXIT_CODE
