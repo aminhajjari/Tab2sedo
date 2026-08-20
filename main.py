@@ -655,11 +655,7 @@ model = Tab2ImageProjector(
     vif_values=vif_values
 ).to(DEVICE)
 
-optimizer = ADOPT(
-    model.parameters(),
-    lr=0.001,
-    decouple=True
-)
+optimizer = optim.AdamW(cvae.parameters(), lr=0.001, weight_decay=0.01)
 
 print(
     f"[INFO] Model created with "
