@@ -19,7 +19,7 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 import warnings
 import scipy.io.arff as arff
 from tqdm import tqdm
-from adopt import ADOPT 
+#from adopt import ADOPT 
 
 
 # ========== ARGUMENT PARSER ==========
@@ -655,7 +655,7 @@ model = Tab2ImageProjector(
     vif_values=vif_values
 ).to(DEVICE)
 
-optimizer = optim.AdamW(cvae.parameters(), lr=0.001, weight_decay=0.01)
+optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
 
 print(
     f"[INFO] Model created with "
