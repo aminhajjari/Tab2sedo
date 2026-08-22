@@ -28,7 +28,7 @@ VENV_PATH="/home/gkianfar/scratch/Amin/ICC/venvMsc"
 BATCH_SCRIPT="$CODE_DIR/run_all_datasets.py"
 MAIN_SCRIPT="$CODE_DIR/main.py"
 
-TIMEOUT=14400
+TIMEOUT=28800
 
 
 # ============================================================
