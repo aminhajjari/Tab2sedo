@@ -402,7 +402,6 @@ if X_train.shape[1] == 0:
 
 scaler = StandardScaler()
 
-scaler = StandardScaler()
 
 # FIT ONLY ON TRAINING DATA
 X_train = scaler.fit_transform(
