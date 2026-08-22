@@ -254,6 +254,15 @@ if num_classes < 2:
 X_df = df.drop(columns=[target_col])
 
 # ------------------------------------------------------------
+# DIAGNOSTIC: catch all-NaN or degenerate columns early
+# ------------------------------------------------------------
+print(f"[DEBUG] X_df dtypes:\n{X_df.dtypes.value_counts()}")
+nan_pct = X_df.isnull().mean()
+fully_nan_cols = nan_pct[nan_pct == 1.0].index.tolist()
+if fully_nan_cols:
+    print(f"[WARNING] {len(fully_nan_cols)} column(s) are 100% NaN after loading: {fully_nan_cols}")
+
+# ------------------------------------------------------------
 # Convert numeric columns
 # ------------------------------------------------------------
 print("[INFO] Preparing feature columns...")
