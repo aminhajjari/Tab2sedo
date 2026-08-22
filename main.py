@@ -393,6 +393,15 @@ print(
 
 print("[INFO] Standardizing features...")
 
+if X_train.shape[1] == 0:
+    raise ValueError(
+        f"[FATAL] X_train has 0 features going into StandardScaler for dataset "
+        f"'{file_name}'. Check the [WARNING] all-NaN column log above — "
+        f"the categorical encoding step likely produced NaN-only columns."
+    )
+
+scaler = StandardScaler()
+
 scaler = StandardScaler()
 
 # FIT ONLY ON TRAINING DATA
