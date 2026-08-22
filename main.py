@@ -364,7 +364,8 @@ for col in categorical_columns:
 print("[INFO] Imputing missing values with median...")
 
 imputer = SimpleImputer(
-    strategy='median'
+    strategy='median',
+    keep_empty_features=True
 )
 
 # ------------------------------------------------------------
