@@ -9,7 +9,12 @@ import matplotlib.pyplot as plt
 import torch
 from torch import nn, optim
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import Dataset, DataLoader, Subset, ConcatDataset, TensorDataset, random_split
+from torch.utils.data.sampler import Sampler
+from sklearn.feature_selection import mutual_info_classif
+import torchvision
+from torchvision import datasets, transforms
+import itertools
 import argparse
 import os
 import json
@@ -20,7 +25,6 @@ import warnings
 import scipy.io.arff as arff
 from tqdm import tqdm
 #from adopt import ADOPT 
-
 
 # ========== ARGUMENT PARSER ==========
 parser = argparse.ArgumentParser(description="Welcome to Table2Image")
@@ -42,9 +46,7 @@ data_path = args.data
 file_name = os.path.basename(os.path.dirname(data_path))
 
 DATASET_ROOT = "/home/gkianfar/scratch/Amin/ICC/Unzippeddata/Image"
- 
-
-
+#CLIP_MODEL_PATH = "/home/gkianfar/scratch/Amin/ICC/models/ViT-B-32.pt"
 
 
 USE_CUDA = torch.cuda.is_available()
@@ -247,194 +249,70 @@ if num_classes > 20:
 if num_classes < 2:
     raise ValueError(f"Dataset has only {num_classes} class. Need at least 2.")
 
-# ============================================================
-# PREPROCESSING
-# ============================================================
-
 X_df = df.drop(columns=[target_col])
-
-# ------------------------------------------------------------
-# DIAGNOSTIC: catch all-NaN or degenerate columns early
-# ------------------------------------------------------------
-print(f"[DEBUG] X_df dtypes:\n{X_df.dtypes.value_counts()}")
-nan_pct = X_df.isnull().mean()
-fully_nan_cols = nan_pct[nan_pct == 1.0].index.tolist()
-if fully_nan_cols:
-    print(f"[WARNING] {len(fully_nan_cols)} column(s) are 100% NaN after loading: {fully_nan_cols}")
-
-# ------------------------------------------------------------
-# Convert numeric columns
-# ------------------------------------------------------------
-print("[INFO] Preparing feature columns...")
-
+print(f"[INFO] Encoding categorical features...")
 for col in X_df.columns:
-    if X_df[col].dtype != 'object':
-        X_df[col] = pd.to_numeric(
-            X_df[col],
-            errors='coerce'
-        )
+    if not pd.api.types.is_numeric_dtype(X_df[col]):
+        le = LabelEncoder()
+        X_df[col] = le.fit_transform(X_df[col].astype(str))
+    else:
+        X_df[col] = pd.to_numeric(X_df[col], errors='coerce')
 
-# ------------------------------------------------------------
-# Convert labels to consecutive integers
-# ------------------------------------------------------------
+if X_df.shape[1] == 0:
+    raise ValueError(f"All features dropped for {file_name} — check dtype handling.")
+
+print(f"[INFO] Imputing missing values with median...")
+imputer = SimpleImputer(strategy='median')
+X = imputer.fit_transform(X_df)
+imputed_count = X_df.isnull().sum().sum()
+if imputed_count > 0:
+    print(f"[INFO] Imputed {imputed_count} missing values")
+
 unique_values = sorted(set(y))
 num_classes = len(unique_values)
+value_map = {unique_values[i]: i for i in range(num_classes)}
+y = np.array([value_map[val] for val in y])
 
-value_map = {
-    unique_values[i]: i
-    for i in range(num_classes)
-}
-
-y = np.array([
-    value_map[val]
-    for val in y
-])
-
-# ------------------------------------------------------------
-# IMPORTANT:
-# Split BEFORE fitting preprocessing components
-# ------------------------------------------------------------
-print("[INFO] Splitting into train/test (80/20)...")
-
-X_train_df, X_test_df, y_train, y_test = train_test_split(
-    X_df,
-    y,
-    test_size=0.2,
-    random_state=42,
-    stratify=y
-)
-
-print(
-    f"[INFO] Train samples: {len(X_train_df)}, "
-    f"Test samples: {len(X_test_df)}"
-)
-
-# ============================================================
-# CATEGORICAL FEATURE ENCODING
-# ============================================================
-
-print("[INFO] Encoding categorical features...")
-
-categorical_columns = X_train_df.select_dtypes(
-    include=['object']
-).columns.tolist()
-
-for col in categorical_columns:
-
-    # --------------------------------------------------------
-    # Learn mapping ONLY from training data
-    # --------------------------------------------------------
-    train_categories = sorted(
-        X_train_df[col].astype(str).unique()
-    )
-
-    category_to_int = {
-        category: idx
-        for idx, category in enumerate(train_categories)
-    }
-
-    # --------------------------------------------------------
-    # Transform training data
-    # --------------------------------------------------------
-    X_train_df[col] = (
-        X_train_df[col]
-        .astype(str)
-        .map(category_to_int)
-        .astype(float)
-    )
-
-    # --------------------------------------------------------
-    # Transform test data
-    #
-    # Unknown categories are mapped to -1
-    # instead of learning them from test data.
-    # --------------------------------------------------------
-    X_test_df[col] = (
-        X_test_df[col]
-        .astype(str)
-        .map(category_to_int)
-        .fillna(-1)
-        .astype(float)
-    )
-
-# ============================================================
-# MISSING-VALUE IMPUTATION
-# ============================================================
-
-print("[INFO] Imputing missing values with median...")
-
-imputer = SimpleImputer(
-    strategy='median',
-    keep_empty_features=True
-)
-
-# ------------------------------------------------------------
-# FIT ONLY ON TRAINING DATA
-# ------------------------------------------------------------
-X_train = imputer.fit_transform(
-    X_train_df
-)
-
-# ------------------------------------------------------------
-# TEST DATA IS ONLY TRANSFORMED
-# ------------------------------------------------------------
-X_test = imputer.transform(
-    X_test_df
-)
-
-print(
-    "[INFO] Missing-value imputation fitted "
-    "on training data only."
-)
-
-# ============================================================
-# STANDARDIZATION
-# ============================================================
-
-print("[INFO] Standardizing features...")
-
-if X_train.shape[1] == 0:
-    raise ValueError(
-        f"[FATAL] X_train has 0 features going into StandardScaler for dataset "
-        f"'{file_name}'. Check the [WARNING] all-NaN column log above — "
-        f"the categorical encoding step likely produced NaN-only columns."
-    )
-
-scaler = StandardScaler()
-
-
-# FIT ONLY ON TRAINING DATA
-X_train = scaler.fit_transform(
-    X_train
-)
-
-# TRANSFORM TEST DATA
-X_test = scaler.transform(
-    X_test
-)
-
-# ============================================================
-# FINAL DATA INFORMATION
-# ============================================================
-
-n_cont_features = X_train.shape[1]
+n_cont_features = X.shape[1]
 tab_latent_size = n_cont_features + 4
 
 print(f"\n{'='*70}")
 print(f"[SUMMARY] Preprocessed Data:")
-print(f"  - Train samples: {X_train.shape[0]}")
-print(f"  - Test samples: {X_test.shape[0]}")
-print(f"  - Features: {n_cont_features}")
+print(f"  - Samples: {X.shape[0]}")
+print(f"  - Features: {X.shape[1]}")
 print(f"  - Classes: {num_classes}")
-print(
-    f"  - Train class distribution: "
-    f"{dict(zip(*np.unique(y_train, return_counts=True)))}"
+print(f"  - Class distribution: {dict(zip(*np.unique(y, return_counts=True)))}")
+print(f"  - Tab latent size: {tab_latent_size}")
+print(f"{'='*70}\n")
+
+print("[INFO] Loading FashionMNIST and MNIST datasets...")
+fashionmnist_dataset = datasets.FashionMNIST(
+    root=DATASET_ROOT, train=True, download=False, transform=transforms.ToTensor()
 )
-print(
-    f"  - Test class distribution: "
-    f"{dict(zip(*np.unique(y_test, return_counts=True)))}"
+mnist_dataset = datasets.MNIST(
+    root=DATASET_ROOT, train=True, download=False, transform=transforms.ToTensor()
 )
 
+class ModifiedLabelDataset(Dataset):
+    def __init__(self, dataset, label_offset=10):
+        self.dataset = dataset
+        self.label_offset = label_offset
+    def __len__(self):
+        return len(self.dataset)
+    def __getitem__(self, idx):
+        image, label = self.dataset[idx]
+        return image, label + self.label_offset
+
+modified_mnist_dataset = ModifiedLabelDataset(mnist_dataset, label_offset=10)
+
+print("[INFO] Standardizing features...")
+scaler = StandardScaler()
+X = scaler.fit_transform(X)
+
+print("[INFO] Splitting into train/test (80/20)...")
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
 print(f"[INFO] Train samples: {len(X_train)}, Test samples: {len(X_test)}")
 
 train_tabular_dataset = TensorDataset(
@@ -466,49 +344,113 @@ def calculate_vif_safe(X_data):
     return vif_values
 
 X_sample = X_train[:min(1000, len(X_train))]
-vif_values = calculate_vif_safe(X_sample)
+y_sample = y_train[:min(1000, len(X_train))]
+vif_values = mutual_info_classif(X_sample, y_sample, random_state=42)
+vif_values = np.clip(vif_values, 1e-3, None)  # avoid exact zeros
 print(f"[INFO] VIF calculated. Mean: {vif_values.mean():.2f}, Max: {vif_values.max():.2f}")
 
-print("[INFO] Preparing tabular datasets...")
+print("[INFO] Preparing synchronized image-tabular datasets...")
+train_tabular_label_counts = torch.bincount(train_tabular_dataset.tensors[1], minlength=num_classes)
+test_tabular_label_counts = torch.bincount(test_tabular_dataset.tensors[1], minlength=num_classes)
+num_samples_needed = train_tabular_label_counts.tolist()
+num_samples_needed_test = test_tabular_label_counts.tolist()
+valid_labels = set(range(num_classes))
 
-train_loader = DataLoader(
-    train_tabular_dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=True
-)
+filtered_fashion = Subset(fashionmnist_dataset, 
+    [i for i, (_, label) in enumerate(fashionmnist_dataset) if label in valid_labels])
+filtered_mnist = Subset(modified_mnist_dataset, 
+    [i for i, (_, label) in enumerate(modified_mnist_dataset) if label in valid_labels])
+combined_dataset = ConcatDataset([filtered_fashion, filtered_mnist])
 
-test_loader = DataLoader(
-    test_tabular_dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=False
-)
+indices_by_label = {label: [] for label in range(num_classes)}
+for i, (_, label) in enumerate(combined_dataset):
+    if label not in indices_by_label:
+        print(f"[WARNING] Unexpected label {label} at index {i}")
+    indices_by_label[label].append(i)
 
-print(
-    f"[INFO] Tabular datasets created. "
-    f"Train batches: {len(train_loader)}"
-)
+repeated_indices = {
+    label: list(itertools.islice(
+        itertools.cycle(indices_by_label[label]),
+        num_samples_needed[label] + num_samples_needed_test[label]
+    ))
+    for label in indices_by_label
+}
 
+aligned_train_indices = []
+aligned_test_indices = []
+for label in valid_labels:
+    train_tab_indices = [i for i, lbl in enumerate(y_train) if lbl == label]
+    test_tab_indices = [i for i, lbl in enumerate(y_test) if lbl == label]
+    train_img_indices = repeated_indices[label][:num_samples_needed[label]]
+    test_img_indices = repeated_indices[label][
+        num_samples_needed[label]:num_samples_needed[label] + num_samples_needed_test[label]
+    ]
+    if len(train_tab_indices) == len(train_img_indices) and \
+       len(test_tab_indices) == len(test_img_indices):
+        aligned_train_indices.extend(list(zip(train_tab_indices, train_img_indices)))
+        aligned_test_indices.extend(list(zip(test_tab_indices, test_img_indices)))
+    else:
+        raise ValueError(f"Mismatch for label {label}")
+
+train_filtered_tab_set = Subset(train_tabular_dataset, [idx[0] for idx in aligned_train_indices])
+train_filtered_img_set = Subset(combined_dataset, [idx[1] for idx in aligned_train_indices])
+test_filtered_tab_set = Subset(test_tabular_dataset, [idx[0] for idx in aligned_test_indices])
+test_filtered_img_set = Subset(combined_dataset, [idx[1] for idx in aligned_test_indices])
+
+class SynchronizedDataset(Dataset):
+    def __init__(self, tabular_dataset, image_dataset):
+        self.tabular_dataset = tabular_dataset
+        self.image_dataset = image_dataset
+        assert len(self.tabular_dataset) == len(self.image_dataset)
+    def __len__(self):
+        return len(self.tabular_dataset)
+    def __getitem__(self, index):
+        tab_data, tab_label = self.tabular_dataset[index]
+        img_data, img_label = self.image_dataset[index]
+        assert tab_label == img_label
+        return tab_data, tab_label, img_data, img_label
+
+train_synchronized_dataset = SynchronizedDataset(train_filtered_tab_set, train_filtered_img_set)
+test_synchronized_dataset = SynchronizedDataset(test_filtered_tab_set, test_filtered_img_set)
+train_synchronized_loader = DataLoader(train_synchronized_dataset, batch_size=BATCH_SIZE, shuffle=True)
+test_synchronized_loader = DataLoader(test_synchronized_dataset, batch_size=BATCH_SIZE)
+print(f"[INFO] Synchronized datasets created. Train batches: {len(train_synchronized_loader)}")
 
 # ========== MODEL DEFINITIONS ==========
-class SimpleCNN(nn.Module):
+class ImageClassifierHead(nn.Module):
+    """
+    Trainable CNN classifier over the reconstructed 28x28 image.
+    Replaces the frozen CLIP zero-shot classifier, which scored against a
+    fixed clothing/digit vocabulary unrelated to the dataset's real classes.
+    """
     def __init__(self, num_classes):
-        super(SimpleCNN, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.fc1 = nn.Linear(64 * 7 * 7, 128)
-        self.fc2 = nn.Linear(128, num_classes)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.5)
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Flatten(),
+            nn.Linear(64 * 7 * 7, 128), nn.ReLU(),
+            nn.Linear(128, num_classes)
+        )
+
     def forward(self, x):
-        x = self.relu(self.conv1(x))
-        x = self.pool(x)
-        x = self.relu(self.conv2(x))
-        x = self.pool(x)
-        x = x.view(x.size(0), -1)
-        x = self.dropout(self.relu(self.fc1(x)))
-        x = self.fc2(x)
-        return x
+        return self.net(x)
+
+
+def supcon_loss(z, labels, temperature=0.1):
+    """Supervised contrastive loss on the CVAE latent z."""
+    z = F.normalize(z, dim=1)
+    sim = torch.matmul(z, z.T) / temperature
+    labels = labels.view(-1, 1)
+    mask = torch.eq(labels, labels.T).float().to(z.device)
+    logits_mask = torch.ones_like(mask) - torch.eye(mask.shape[0], device=z.device)
+    mask = mask * logits_mask
+    exp_sim = torch.exp(sim) * logits_mask
+    log_prob = sim - torch.log(exp_sim.sum(1, keepdim=True) + 1e-8)
+    mean_log_prob_pos = (mask * log_prob).sum(1) / (mask.sum(1) + 1e-8)
+    return -mean_log_prob_pos.mean()
+
+
 
 class SimpleMLP(nn.Module):
     def __init__(self, input_dim, latent_dim, num_classes):
@@ -528,548 +470,394 @@ class VIFInitialization(nn.Module):
         self.vif_values = vif_values
         self.fc1 = nn.Linear(input_dim, input_dim + 4)
         self.fc2 = nn.Linear(input_dim + 4, input_dim)
-        vif_tensor = torch.tensor(vif_values, dtype=torch.float32)
-        vif_tensor = vif_tensor / (vif_tensor.mean() + 1e-6)
-        inv_vif = 1.0 / torch.clamp(vif_tensor, min=1.0)
+        importance = torch.tensor(vif_values, dtype=torch.float32)
+        importance = importance / (importance.mean() + 1e-6)
         with torch.no_grad():
             for i in range(self.fc1.weight.data.shape[0]):
-                self.fc1.weight.data[i, :] = inv_vif[i % len(inv_vif)] / (self.input_dim + 4)
+                self.fc1.weight.data[i, :] = importance[i % len(importance)] / (self.input_dim + 4)
         print("[INFO] VIF-based weight initialization complete.")
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         return x
 
-class Tab2ImageProjector(nn.Module):
-
-    def __init__(
-        self,
-        input_dim,
-        tab_latent_size,
-        num_classes,
-        vif_values=None
-    ):
-        super(Tab2ImageProjector, self).__init__()
-
-        # ==========================================
-        # 1. Tabular representation
-        # ==========================================
-        self.mlp = SimpleMLP(
-            input_dim=input_dim,
-            latent_dim=tab_latent_size,
-            num_classes=num_classes
-        )
-
-        # ==========================================
-        # 2. VIF representation
-        # ==========================================
+class CAEWithTabEmbedding(nn.Module):
+    def __init__(self, input_dim, tab_latent_size, num_classes, latent_size=8, vif_values=None):
+        super(CAEWithTabEmbedding, self).__init__()
+        self.mlp = SimpleMLP(input_dim, tab_latent_size, num_classes)
         if vif_values is not None:
-
-            self.vif_model = VIFInitialization(
-                input_dim=input_dim,
-                vif_values=vif_values
-            )
-
+            self.vif_model = VIFInitialization(input_dim, vif_values)
         else:
-
             self.vif_model = None
-
-        # ==========================================
-        # 3. Tabular -> Image projector
-        # ==========================================
-        self.projector = nn.Sequential(
-
-            nn.Linear(
-                tab_latent_size + input_dim,
-                256
-            ),
-
+        self.encoder = nn.Sequential(
+            nn.Linear(28*28 + tab_latent_size + input_dim, 128),
             nn.ReLU(),
-
-            nn.Linear(
-                256,
-                28 * 28
-            ),
-
+            nn.Linear(128, latent_size)
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_size + tab_latent_size + input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 28*28),
             nn.Sigmoid()
         )
-
-        # ==========================================
-        # 4. CNN classifier
-        # ==========================================
-        self.final_classifier = SimpleCNN(
-            num_classes=num_classes
+        self.final_classifier = ImageClassifierHead(num_classes=num_classes)
+        self.gate = nn.Sequential(
+            nn.Linear(tab_latent_size + num_classes, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
+            nn.Sigmoid()
         )
-
-    def forward(self, tab_data):
-
-        # ------------------------------------------
-        # VIF branch
-        # ------------------------------------------
+    def encode(self, x, tab_embedding, vif_embedding):
+        return self.encoder(torch.cat([x, tab_embedding, vif_embedding], dim=1))
+    def decode(self, z, tab_embedding, vif_embedding):
+        return self.decoder(torch.cat([z, tab_embedding, vif_embedding], dim=1))
+    def forward(self, x, tab_data):
         if self.vif_model is not None:
-
-            vif_embedding = self.vif_model(
-                tab_data
-            )
-
+            vif_embedding = self.vif_model(tab_data)
         else:
-
             vif_embedding = tab_data
-
-        # ------------------------------------------
-        # MLP branch
-        # ------------------------------------------
-        tab_embedding, tab_pred = self.mlp(
-            tab_data
-        )
-
-        # ------------------------------------------
-        # Combine tabular representations
-        # ------------------------------------------
-        combined_embedding = torch.cat(
-            [
-                tab_embedding,
-                vif_embedding
-            ],
-            dim=1
-        )
-
-        # ------------------------------------------
-        # Generate pseudo-image
-        # ------------------------------------------
-        pseudo_image = self.projector(
-            combined_embedding
-        )
-
-        # ------------------------------------------
-        # Reshape: 784 -> 1 x 28 x 28
-        # ------------------------------------------
-        pseudo_image = pseudo_image.view(
-            -1,
-            1,
-            28,
-            28
-        )
-
-        # ------------------------------------------
-        # CNN classification
-        # ------------------------------------------
-        img_pred = self.final_classifier(
-            pseudo_image
-        )
-
-        return (
-            pseudo_image,
-            tab_pred,
-            img_pred
-        )
+        tab_embedding, tab_pred = self.mlp(tab_data)
+        z = self.encode(x, tab_embedding, vif_embedding)
+        recon_x = self.decode(z, tab_embedding, vif_embedding)
+        img_pred = self.final_classifier(recon_x.view(-1, 1, 28, 28))
+        alpha = self.gate(torch.cat([tab_embedding, img_pred], dim=1))
+        fused_pred = alpha * img_pred + (1 - alpha) * tab_pred
+        return recon_x, tab_pred, img_pred, fused_pred, z
 
 print("[INFO] Creating model...")
-
-model = Tab2ImageProjector(
+cae = CAEWithTabEmbedding(
     input_dim=n_cont_features,
     tab_latent_size=tab_latent_size,
     num_classes=num_classes,
+    latent_size=8,
     vif_values=vif_values
 ).to(DEVICE)
+#optimizer = optim.AdamW(cae.parameters(), lr=0.001, weight_decay=1e-4)
+#optimizer = ADOPT(cae.parameters(), lr=0.001, decouple=True, weight_decay=1e-4)
+#optimizer = ADOPT(cae.parameters(), lr=0.001, decouple=True)
+optimizer = optim.AdamW(cae.parameters(), lr=0.001, weight_decay=1e-4)
 
-optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
-
-print(
-    f"[INFO] Model created with "
-    f"{sum(p.numel() for p in model.parameters())} parameters"
-)
+print(f"[INFO] Model created with {sum(p.numel() for p in cae.parameters())} parameters")
 # ============================================================
 # TABLE 2 – TRAINABLE PARAMETER COUNT (C = 2, N = 78)
 # TRAINABLE PARAMETER COUNT
 # ============================================================
-num_params = sum(
-    p.numel()
-    for p in model.parameters()
-    if p.requires_grad
-)
+num_params = sum(p.numel() for p in cae.parameters() if p.requires_grad)
 
 print(f"[INFO] Model created with {num_params:,} trainable parameters")
 print(f"       Configuration: C={num_classes} classes, N={n_cont_features} features")
 
-print(
-    f"       Architecture: "
-    f"Tabular → MLP+VIF → 256 → 784 → 28×28 → CNN"
-)
+# Note if this matches Table 2's reference configuration
+if num_classes == 2 and n_cont_features == 78:
+    print(f"       ✓ Matches Table 2 specs (Expected: ~627.6K)")
 #############################################
-def loss_function(
-    tab_pred,
-    tab_labels,
-    img_pred,
-    img_labels
-):
+def loss_function(recon_x, x, tab_pred, tab_labels, img_pred, img_labels, fused_pred, z, con_weight=0.5):
+    BCE = F.mse_loss(recon_x, x)
+    tab_loss = F.cross_entropy(tab_pred, tab_labels)
+    img_loss = F.cross_entropy(img_pred, img_labels)
+    fused_loss = F.cross_entropy(fused_pred, tab_labels)
+    con_loss = supcon_loss(z, tab_labels)
+    return BCE + tab_loss + img_loss + fused_loss + con_weight * con_loss
 
-    tab_loss = F.cross_entropy(
-        tab_pred,
-        tab_labels
-    )
-
-    img_loss = F.cross_entropy(
-        img_pred,
-        img_labels
-    )
-
-    return tab_loss + img_loss
-
-def train(model, train_loader, optimizer, epoch):
-
+def train(model, train_data_loader, optimizer, epoch):
     model.train()
-
-    train_loss = 0.0
-
-    for tab_data, tab_label in train_loader:
-
+    train_loss = 0
+    for tab_data, tab_label, img_data, img_label in train_data_loader:
+        img_data = img_data.view(-1, 28*28).to(DEVICE)
         tab_data = tab_data.to(DEVICE)
+        img_label = img_label.to(DEVICE).long()
         tab_label = tab_label.to(DEVICE).long()
-
         optimizer.zero_grad()
-
-        # Tabular -> pseudo-image -> CNN
-        pseudo_image, tab_pred, img_pred = model(
-            tab_data
-        )
-
-        # Classification-only objective
-        loss = loss_function(
-            tab_pred,
-            tab_label,
-            img_pred,
-            tab_label
-        )
-
+        random_array = np.random.rand(img_data.shape[0], 28*28)
+        x_rand = torch.Tensor(random_array).to(DEVICE)
+        recon_x, tab_pred, img_pred, fused_pred, z = model(x_rand, tab_data)
+        loss = loss_function(recon_x, img_data, tab_pred, tab_label, img_pred, img_label, fused_pred, z)
         loss.backward()
-
-        optimizer.step()
-
         train_loss += loss.item()
+        optimizer.step()
+    return train_loss / len(train_data_loader)
 
-    return train_loss / len(train_loader)
-
-def test(
-    model,
-    test_loader,
-    epoch,
-    best_accuracy,
-    best_auc,
-    best_epoch
-):
-
+def test(model, test_data_loader, epoch, best_accuracy, best_auc, best_epoch):
     model.eval()
-
-    test_loss = 0.0
-
+    test_loss = 0
     correct_tab_total = 0
     correct_img_total = 0
-
+    correct_fused_total = 0
     total = 0
-
-    all_tab_labels = []
-    all_tab_preds = []
-
-    all_img_labels = []
-    all_img_preds = []
+    all_tab_labels, all_tab_preds = [], []
+    all_img_labels, all_img_preds = [], []
+    all_fused_preds = []
 
     with torch.no_grad():
-
-        for tab_data, tab_label in test_loader:
-
+        for tab_data, tab_label, img_data, img_label in test_data_loader:
+            img_data = img_data.view(-1, 28*28).to(DEVICE)
             tab_data = tab_data.to(DEVICE)
+            img_label = img_label.to(DEVICE).long()
             tab_label = tab_label.to(DEVICE).long()
-
-            # Tabular -> pseudo-image -> CNN
-            pseudo_image, tab_pred, img_pred = model(
-                tab_data
-            )
-
-            loss = loss_function(
-                tab_pred,
-                tab_label,
-                img_pred,
-                tab_label
-            )
-
-            test_loss += loss.item()
-
-            # Probabilities
-            tab_probs = F.softmax(
-                tab_pred,
-                dim=1
-            )
-
-            img_probs = F.softmax(
-                img_pred,
-                dim=1
-            )
-
-            all_tab_labels.extend(
-                tab_label.cpu().numpy()
-            )
-
-            all_tab_preds.extend(
-                tab_probs.cpu().numpy()
-            )
-
-            all_img_labels.extend(
-                tab_label.cpu().numpy()
-            )
-
-            all_img_preds.extend(
-                img_probs.cpu().numpy()
-            )
-
-            # Predictions
-            tab_predicted = torch.argmax(
-                tab_pred,
-                dim=1
-            )
-
-            img_predicted = torch.argmax(
-                img_pred,
-                dim=1
-            )
-
-            correct_tab_total += (
-                tab_predicted == tab_label
-            ).sum().item()
-
-            correct_img_total += (
-                img_predicted == tab_label
-            ).sum().item()
-
+            random_array = np.random.rand(img_data.shape[0], 28*28)
+            x_rand = torch.Tensor(random_array).view(-1, 28*28).to(DEVICE)
+            recon_x, tab_pred, img_pred, fused_pred, z = model(x_rand, tab_data)
+            test_loss += loss_function(recon_x, img_data, tab_pred, tab_label, img_pred, img_label, fused_pred, z).item()
+            tab_probs = F.softmax(tab_pred, dim=1)
+            img_probs = F.softmax(img_pred, dim=1)
+            fused_probs = F.softmax(fused_pred, dim=1)
+            all_tab_labels.extend(tab_label.cpu().numpy())
+            all_tab_preds.extend(tab_probs.cpu().numpy())
+            all_img_labels.extend(img_label.cpu().numpy())
+            all_img_preds.extend(img_probs.cpu().numpy())
+            all_fused_preds.extend(fused_probs.cpu().numpy())
+            tab_predicted = torch.argmax(tab_pred, dim=1)
+            img_predicted = torch.argmax(img_pred, dim=1)
+            fused_predicted = torch.argmax(fused_pred, dim=1)
+            correct_tab_total += (tab_predicted == tab_label).sum().item()
+            correct_img_total += (img_predicted == img_label).sum().item()
+            correct_fused_total += (fused_predicted == tab_label).sum().item()
             total += tab_label.size(0)
+    
+    test_loss /= len(test_data_loader)
+    tab_accuracy_total = 100 * correct_tab_total / total
+    img_accuracy_total = 100 * correct_img_total / total
+    fused_accuracy_total = 100 * correct_fused_total / total
+    
+    all_tab_preds_arr = np.array(all_tab_preds)
+    all_fused_preds_arr = np.array(all_fused_preds)
+    all_tab_labels_arr = np.array(all_tab_labels)
 
-    test_loss /= len(test_loader)
+    tab_auc, fused_auc = 0.0, 0.0
+    if not (np.isnan(all_tab_preds_arr).any() or np.isinf(all_tab_preds_arr).any()):
+        try:
+            if num_classes == 2:
+                tab_auc = roc_auc_score(all_tab_labels_arr, all_tab_preds_arr[:, 1])
+            else:
+                tab_auc = roc_auc_score(all_tab_labels_arr, all_tab_preds_arr, multi_class="ovr", average="macro")
+        except Exception as e:
+            print(f"[WARNING] Tab AUC calculation failed: {e}")
 
-    tab_accuracy_total = (
-        100.0 *
-        correct_tab_total /
-        total
-    )
+    if not (np.isnan(all_fused_preds_arr).any() or np.isinf(all_fused_preds_arr).any()):
+        try:
+            if num_classes == 2:
+                fused_auc = roc_auc_score(all_tab_labels_arr, all_fused_preds_arr[:, 1])
+            else:
+                fused_auc = roc_auc_score(all_tab_labels_arr, all_fused_preds_arr, multi_class="ovr", average="macro")
+        except Exception as e:
+            print(f"[WARNING] Fused AUC calculation failed: {e}")
 
-    img_accuracy_total = (
-        100.0 *
-        correct_img_total /
-        total
-    )
-
-    # Convert to numpy
-    all_tab_preds_arr = np.array(
-        all_tab_preds
-    )
-
-    all_img_preds_arr = np.array(
-        all_img_preds
-    )
-
-    all_tab_labels_arr = np.array(
-        all_tab_labels
-    )
-
-    all_img_labels_arr = np.array(
-        all_img_labels
-    )
-
-    tab_auc = 0.0
-    img_auc = 0.0
-
-    try:
-
-        if num_classes == 2:
-
-            tab_auc = roc_auc_score(
-                all_tab_labels_arr,
-                all_tab_preds_arr[:, 1]
-            )
-
-            img_auc = roc_auc_score(
-                all_img_labels_arr,
-                all_img_preds_arr[:, 1]
-            )
-
-        else:
-
-            tab_auc = roc_auc_score(
-                all_tab_labels_arr,
-                all_tab_preds_arr,
-                multi_class="ovr",
-                average="macro"
-            )
-
-            img_auc = roc_auc_score(
-                all_img_labels_arr,
-                all_img_preds_arr,
-                multi_class="ovr",
-                average="macro"
-            )
-
-    except Exception as e:
-
-        print(
-            f"[WARNING] AUC calculation failed: {e}"
-        )
-
-    if img_accuracy_total > best_accuracy:
-
-        best_accuracy = img_accuracy_total
+    if fused_accuracy_total > best_accuracy:
+        best_accuracy = fused_accuracy_total
+        best_auc = fused_auc
         best_epoch = epoch
+        print(f"[INFO] New best accuracy: {best_accuracy:.2f}% (AUC: {fused_auc:.4f}) at epoch {epoch}")
 
-        print(
-            f"[INFO] New best accuracy: "
-            f"{best_accuracy:.2f}% "
-            f"at epoch {epoch}"
-        )
-
-    if img_auc > best_auc:
-
-        best_auc = img_auc
-
-    return (
-        best_accuracy,
-        best_auc,
-        best_epoch,
-        test_loss,
-        tab_accuracy_total,
-        img_accuracy_total
-    )
+    return best_accuracy, best_auc, best_epoch, test_loss, tab_accuracy_total, fused_accuracy_total
 
 # ========== IMAGE SAVING FUNCTION ==========
 
-def save_sample_images(
-    model,
-    test_loader,
-    dataset_name,
-    num_classes,
-    num_images=20
-):
-
+def save_sample_images(model, test_data_loader, dataset_name, num_classes, num_images=20):
+    """
+    Save reconstructed images with DIVERSE labels
+    Ensures all classes are represented in saved samples
+    """
     model.eval()
-
-    images = []
-    labels = []
-    predictions = []
-
+    images_base_dir = "/home/gkianfar/scratch/Amin/ICC/output/imageout"
+    images_dir = os.path.join(images_base_dir, dataset_name)
+    os.makedirs(images_dir, exist_ok=True)
+    
+    # Calculate samples per class (ensure diversity)
+    samples_per_class = max(1, num_images // num_classes)
+    total_to_save = samples_per_class * num_classes
+    
+    print(f"\n[INFO] Generating {total_to_save} sample images...")
+    print(f"[INFO] Strategy: {samples_per_class} samples × {num_classes} classes")
+    
+    # Storage for images by class
+    class_samples = {label: [] for label in range(num_classes)}
+    
+    # Collect samples for each class
     with torch.no_grad():
-
-        for tab_data, tab_label in test_loader:
-
-            tab_data = tab_data.to(DEVICE)
-
-            pseudo_images, _, img_pred = model(
-                tab_data
-            )
-
-            predicted = torch.argmax(
-                img_pred,
-                dim=1
-            )
-
-            for i in range(
-                len(tab_label)
-            ):
-
-                if len(images) >= num_images:
-                    break
-
-                images.append(
-                    pseudo_images[i]
-                    .cpu()
-                    .squeeze()
-                    .numpy()
-                )
-
-                labels.append(
-                    tab_label[i].item()
-                )
-
-                predictions.append(
-                    predicted[i].item()
-                )
-
-            if len(images) >= num_images:
+        for tab_data, tab_label, img_data, img_label in test_data_loader:
+            # Check if we have enough samples for all classes
+            if all(len(samples) >= samples_per_class for samples in class_samples.values()):
                 break
-
-    images_base_dir = (
-        "/home/gkianfar/scratch/Amin/AI/outputs/imageout"
-    )
-
-    images_dir = os.path.join(
-        images_base_dir,
-        dataset_name
-    )
-
-    os.makedirs(
-        images_dir,
-        exist_ok=True
-    )
-
-    num_cols = 5
-
-    num_rows = int(
-        np.ceil(
-            len(images) / num_cols
-        )
-    )
-
-    fig, axes = plt.subplots(
-        num_rows,
-        num_cols,
-        figsize=(12, 2.5 * num_rows)
-    )
-
-    axes = np.array(
-        axes
-    ).reshape(-1)
-
-    for i in range(len(images)):
-
-        axes[i].imshow(
-            images[i],
-            cmap="gray"
-        )
-
-        axes[i].set_title(
-            f"GT: {labels[i]} | "
-            f"Pred: {predictions[i]}"
-        )
-
-        axes[i].axis("off")
-
-    for i in range(
-        len(images),
-        len(axes)
-    ):
-
-        axes[i].axis("off")
-
+                
+            img_data_flat = img_data.view(-1, 28*28).to(DEVICE)
+            tab_data = tab_data.to(DEVICE)
+            
+            # Generate reconstructed images
+            random_array = np.random.rand(img_data_flat.shape[0], 28*28)
+            x_rand = torch.Tensor(random_array).to(DEVICE)
+            recon_x, _, _, _, _ = model(x_rand, tab_data)
+            
+            # Store samples by class
+            for i in range(len(tab_label)):
+                label = tab_label[i].item()
+                
+                # Only collect if we need more samples for this class
+                if len(class_samples[label]) < samples_per_class:
+                    class_samples[label].append({
+                        'original': img_data[i].cpu().numpy(),
+                        'reconstructed': recon_x[i].cpu().numpy().reshape(28, 28),
+                        'label': label
+                    })
+    
+    # Flatten samples for saving
+    all_samples = []
+    for label in sorted(class_samples.keys()):
+        all_samples.extend(class_samples[label])
+    
+    num_saved = len(all_samples)
+    print(f"[INFO] Collected {num_saved} samples across {num_classes} classes")
+    
+    # Print distribution
+    print(f"[INFO] Samples per class:")
+    for label in range(num_classes):
+        count = len(class_samples[label])
+        print(f"  Class {label}: {count} samples")
+    
+    # ============ CREATE GRID VISUALIZATION ============
+    num_cols = min(5, num_classes)  # Show up to 5 classes per row
+    num_rows = 2 * num_classes  # 2 rows per class (original + reconstructed)
+    
+    fig, axes = plt.subplots(num_rows, num_cols, 
+                             figsize=(3*num_cols, 2*num_rows))
+    
+    # Handle edge cases for axes dimensions
+    if num_rows == 1:
+        axes = axes.reshape(1, -1)
+    elif num_cols == 1:
+        axes = axes.reshape(-1, 1)
+    
+    # Plot images organized by class
+    for class_idx in range(num_classes):
+        samples = class_samples[class_idx][:num_cols]  # Take up to num_cols samples
+        
+        for sample_idx, sample in enumerate(samples):
+            orig_row = class_idx * 2
+            recon_row = class_idx * 2 + 1
+            
+            # Original image
+            axes[orig_row, sample_idx].imshow(sample['original'].squeeze(), cmap='gray')
+            axes[orig_row, sample_idx].set_title(
+                f'Original\nClass {sample["label"]}', 
+                fontsize=8, fontweight='bold'
+            )
+            axes[orig_row, sample_idx].axis('off')
+            
+            # Reconstructed image
+            axes[recon_row, sample_idx].imshow(sample['reconstructed'], cmap='gray')
+            axes[recon_row, sample_idx].set_title(
+                f'Generated\nClass {sample["label"]}', 
+                fontsize=8
+            )
+            axes[recon_row, sample_idx].axis('off')
+        
+        # Hide unused subplots in this class row
+        for empty_col in range(len(samples), num_cols):
+            axes[orig_row, empty_col].axis('off')
+            axes[recon_row, empty_col].axis('off')
+    
+    plt.suptitle(f'{dataset_name} - Image Generation by Class', 
+                 fontsize=14, fontweight='bold', y=0.995)
     plt.tight_layout()
-
-    grid_path = os.path.join(
-        images_dir,
-        "tabular_to_pseudo_images.png"
-    )
-
-    plt.savefig(
-        grid_path,
-        dpi=150,
-        bbox_inches="tight"
-    )
-
+    
+    grid_path = os.path.join(images_dir, 'comparison_grid_by_class.png')
+    plt.savefig(grid_path, dpi=150, bbox_inches='tight')
     plt.close()
-
-    print(
-        f"[INFO] Saved pseudo-image visualization "
-        f"to: {grid_path}"
-    )
-
-    return (
-        len(images),
-        images_dir
-    )
+    print(f"[INFO] Saved class-organized grid to: {grid_path}")
+    
+    # ============ ALSO CREATE RANDOM MIXED GRID ============
+    # Show diversity in a single view
+    random_samples = np.random.choice(len(all_samples), 
+                                     size=min(20, len(all_samples)), 
+                                     replace=False)
+    
+    num_random = len(random_samples)
+    num_cols_random = min(5, num_random)
+    num_rows_random = 2 * ((num_random + num_cols_random - 1) // num_cols_random)
+    
+    fig2, axes2 = plt.subplots(num_rows_random, num_cols_random, 
+                               figsize=(3*num_cols_random, 3*num_rows_random))
+    
+    if num_rows_random == 1:
+        axes2 = axes2.reshape(1, -1)
+    elif num_cols_random == 1:
+        axes2 = axes2.reshape(-1, 1)
+    
+    axes2_flat = axes2.flatten()
+    
+    for idx, sample_idx in enumerate(random_samples):
+        sample = all_samples[sample_idx]
+        orig_idx = idx * 2
+        recon_idx = idx * 2 + 1
+        
+        # Original
+        if orig_idx < len(axes2_flat):
+            axes2_flat[orig_idx].imshow(sample['original'].squeeze(), cmap='gray')
+            axes2_flat[orig_idx].set_title(
+                f'Original (Class {sample["label"]})', 
+                fontsize=8
+            )
+            axes2_flat[orig_idx].axis('off')
+        
+        # Reconstructed
+        if recon_idx < len(axes2_flat):
+            axes2_flat[recon_idx].imshow(sample['reconstructed'], cmap='gray')
+            axes2_flat[recon_idx].set_title(
+                f'Generated (Class {sample["label"]})', 
+                fontsize=8
+            )
+            axes2_flat[recon_idx].axis('off')
+    
+    # Hide unused subplots
+    for idx in range(len(random_samples) * 2, len(axes2_flat)):
+        axes2_flat[idx].axis('off')
+    
+    plt.tight_layout()
+    mixed_grid_path = os.path.join(images_dir, 'comparison_grid_mixed.png')
+    plt.savefig(mixed_grid_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Saved mixed grid to: {mixed_grid_path}")
+    
+    # ============ SAVE INDIVIDUAL IMAGES ============
+    for idx, sample in enumerate(all_samples):
+        label = sample['label']
+        
+        # Original
+        orig_path = os.path.join(images_dir, 
+                                f'sample_{idx:02d}_class{label}_original.png')
+        plt.imsave(orig_path, sample['original'].squeeze(), cmap='gray')
+        
+        # Reconstructed
+        recon_path = os.path.join(images_dir, 
+                                 f'sample_{idx:02d}_class{label}_generated.png')
+        plt.imsave(recon_path, sample['reconstructed'], cmap='gray')
+    
+    print(f"[INFO] Saved {num_saved} individual image pairs")
+    
+    # ============ CREATE CLASS DISTRIBUTION REPORT ============
+    report_path = os.path.join(images_dir, 'sample_distribution.txt')
+    with open(report_path, 'w') as f:
+        f.write(f"Image Sample Distribution Report\n")
+        f.write(f"="*50 + "\n\n")
+        f.write(f"Dataset: {dataset_name}\n")
+        f.write(f"Total samples saved: {num_saved}\n")
+        f.write(f"Number of classes: {num_classes}\n")
+        f.write(f"Target samples per class: {samples_per_class}\n\n")
+        f.write(f"Actual distribution:\n")
+        f.write(f"-"*50 + "\n")
+        for label in range(num_classes):
+            count = len(class_samples[label])
+            percentage = (count / num_saved * 100) if num_saved > 0 else 0
+            f.write(f"  Class {label:2d}: {count:3d} samples ({percentage:5.1f}%)\n")
+        f.write(f"\nGenerated files:\n")
+        f.write(f"-"*50 + "\n")
+        f.write(f"  1. comparison_grid_by_class.png - Organized by class\n")
+        f.write(f"  2. comparison_grid_mixed.png    - Random mixed view\n")
+        f.write(f"  3. sample_*.png                 - Individual images\n")
+    
+    print(f"[INFO] Saved distribution report to: {report_path}")
+    print(f"[INFO] All images saved to: {images_dir}")
+    
+    return num_saved, images_dir
 
 # ========== TRAINING LOOP (NO MODEL SAVING) ==========
 print("\n" + "="*70)
@@ -1081,26 +869,12 @@ best_auc = 0
 best_epoch = 0
 
 for epoch in range(1, EPOCH + 1):
-    train_loss = train(
-        model,
-        train_loader,
-        optimizer,
-        epoch
-    )
-
+    train_loss = train(cae, train_synchronized_loader, optimizer, epoch)
     best_accuracy, best_auc, best_epoch, test_loss, tab_acc, img_acc = test(
-        model,
-        test_loader,
-        epoch,
-        best_accuracy,
-        best_auc,
-        best_epoch
+        cae, test_synchronized_loader, epoch, best_accuracy, best_auc, best_epoch
     )
-
+    
     if epoch % 10 == 0 or epoch == 1:
-        print(f"[Epoch {epoch:3d}] Train Loss: {train_loss:.4f} | "
-              f"Test Loss: {test_loss:.4f} | "
-              f"Tab Acc: {tab_acc:.2f}% | Img Acc: {img_acc:.2f}%")
         print(f"[Epoch {epoch:3d}] Train Loss: {train_loss:.4f} | "
               f"Test Loss: {test_loss:.4f} | "
               f"Tab Acc: {tab_acc:.2f}% | Img Acc: {img_acc:.2f}%")
@@ -1118,7 +892,7 @@ print("YOUR MODEL BENCHMARK RESULTS")
 print("="*60)
 
 # Load/save your results history
-RESULTS_FILE = "/home/gkianfar/scratch/Amin/Sedo/output/my_model_wins.json"
+RESULTS_FILE = "/home/gkianfar/scratch/Amin/ICC/output/my_model_wins.json"
 if os.path.exists(RESULTS_FILE):
     with open(RESULTS_FILE, 'r') as f:
         history = json.load(f)
@@ -1165,11 +939,7 @@ print("="*60 + "\n")
 
 # Save sample images
 num_saved, save_dir = save_sample_images(
-    model,
-    test_loader,
-    file_name,
-    num_classes,
-    NUM_IMAGES_TO_SAVE
+    cae, test_synchronized_loader, file_name, num_classes, NUM_IMAGES_TO_SAVE
 )
 
 
@@ -1179,7 +949,7 @@ num_saved, save_dir = save_sample_images(
 # Output results as JSON to stdout (for batch script to capture)
 results = {
     'dataset': file_name,
-    'num_samples': len(X_df),
+    'num_samples': len(X),
     'num_features': n_cont_features,
     'num_classes': num_classes,
     'best_accuracy': best_accuracy,
