@@ -33,6 +33,11 @@ TIMEOUT=28800
 
 # ============================================================
 # Create output directories
+# NOTE: SLURM opens --output/--error paths before the script body
+# runs, so the logs/ directory must already exist at submit time.
+# This mkdir only protects OUTPUT for later stages of the script.
+# Run: mkdir -p /home/gkianfar/scratch/Amin/Sedo/output/logs
+# once, from the shell, BEFORE you sbatch this script.
 # ============================================================
 
 mkdir -p "$OUTPUT"
@@ -47,7 +52,12 @@ echo "=========================================="
 echo "LOADING ENVIRONMENT"
 echo "=========================================="
 
-module purge
+# Plain "module purge" leaves sticky/parent modules loaded
+# (StdEnv, imkl, flexiblas, gcc, etc.). Those then conflict with
+# the BLAS/MKL bundled in python/3.11's venv and cause the
+# interpreter itself to crash with "Illegal instruction" before
+# it can even print --version. --force clears everything.
+module --force purge
 
 module load StdEnv/2023
 module load python/3.11
