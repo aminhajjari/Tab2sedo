@@ -43,7 +43,7 @@ import os
 import json
 import argparse
 from datetime import datetime
-
+import arff as liac_arff
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -109,15 +109,34 @@ def load_dataset(file_path):
     if file_ext == ".csv":
         return pd.read_csv(file_path), None
     if file_ext == ".arff":
-        data, meta = arff.loadarff(file_path)
-        df = pd.DataFrame(data)
-        for col in df.columns:
-            if df[col].dtype == "object":
-                try:
-                    df[col] = df[col].str.decode("utf-8")
-                except AttributeError:
-                    pass
-        return df, meta
+        try:
+            data, meta = arff.loadarff(file_path)
+            df = pd.DataFrame(data)
+            for col in df.columns:
+                if df[col].dtype == "object":
+                    try:
+                        df[col] = df[col].str.decode("utf-8")
+                    except AttributeError:
+                        pass
+            return df, meta
+        except ValueError as e:
+            print(f"[WARN] scipy arff parser failed ({e}); retrying with liac-arff fallback")
+            
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            # strip stray whitespace before values in @data lines (fixes
+            # nominal-mismatch errors like pendigits: " 8" vs "8")
+            lines = content.splitlines()
+            data_idx = next((i for i, l in enumerate(lines) if l.strip().lower() == "@data"), None)
+            if data_idx is not None:
+                for i in range(data_idx + 1, len(lines)):
+                    if lines[i].strip() and not lines[i].startswith("{"):
+                        lines[i] = ",".join(p.strip() for p in lines[i].split(","))
+            cleaned = "\n".join(lines)
+            dataset = liac_arff.loads(cleaned)
+            cols = [a[0] for a in dataset["attributes"]]
+            df = pd.DataFrame(dataset["data"], columns=cols)
+            return df, None
     if file_ext == ".data":
         for sep in [",", " ", "\t", ";"]:
             try:
