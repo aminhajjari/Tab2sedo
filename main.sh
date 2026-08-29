@@ -272,7 +272,134 @@ python "$BATCH_SCRIPT" \
 
 EXIT_CODE=$?
 
+# ============================================================
+# Aggregate results across all datasets
+# ============================================================
 
+echo "" >&2
+echo "======================================================================" >&2
+echo "AGGREGATING FINAL RESULTS" >&2
+echo "======================================================================" >&2
+
+# Find the output directory created for this SLURM job
+RUN_OUTPUT_DIR=$(find "$OUTPUT" \
+    -maxdepth 1 \
+    -type d \
+    -name "*_JOB${SLURM_JOB_ID}" \
+    -print -quit)
+
+if [ -z "$RUN_OUTPUT_DIR" ]; then
+    echo "[WARNING] Could not find job-specific output directory." >&2
+    echo "[WARNING] Searching all result JSON files under: $OUTPUT" >&2
+    RUN_OUTPUT_DIR="$OUTPUT"
+else
+    echo "Job output directory:" >&2
+    echo "$RUN_OUTPUT_DIR" >&2
+fi
+
+echo "" >&2
+echo "Calculating average Accuracy and AUC..." >&2
+
+python - "$RUN_OUTPUT_DIR" <<'PY' >&2
+import sys
+import json
+from pathlib import Path
+import numpy as np
+
+output_dir = Path(sys.argv[1])
+
+# Find all per-dataset result files
+result_files = sorted(output_dir.rglob("*_results.json"))
+
+print("=" * 70)
+print("FINAL RESULTS ACROSS ALL DATASETS")
+print("=" * 70)
+
+if not result_files:
+    print("[WARNING] No *_results.json files found.")
+    print(f"Searched in: {output_dir}")
+    sys.exit(0)
+
+accuracies = []
+aucs = []
+datasets = []
+
+for result_file in result_files:
+    try:
+        with open(result_file, "r") as f:
+            result = json.load(f)
+
+        accuracy = result.get("test_fused_accuracy")
+        auc = result.get("test_fused_auc")
+        dataset = result.get("dataset", result_file.stem)
+
+        if accuracy is not None:
+            accuracies.append(float(accuracy))
+
+        if auc is not None:
+            aucs.append(float(auc))
+
+        if accuracy is not None or auc is not None:
+            datasets.append(dataset)
+
+    except Exception as e:
+        print(f"[WARNING] Could not read {result_file}: {e}")
+
+print(f"Result files found : {len(result_files)}")
+print(f"Datasets included  : {len(datasets)}")
+print()
+
+if accuracies:
+    avg_accuracy = np.mean(accuracies)
+    std_accuracy = np.std(accuracies, ddof=1) if len(accuracies) > 1 else 0.0
+    median_accuracy = np.median(accuracies)
+
+    print(f"Average Accuracy   : {avg_accuracy:.4f} ({avg_accuracy * 100:.2f}%)")
+    print(f"Std Accuracy       : {std_accuracy:.4f} ({std_accuracy * 100:.2f}%)")
+    print(f"Median Accuracy    : {median_accuracy:.4f} ({median_accuracy * 100:.2f}%)")
+else:
+    print("Average Accuracy   : N/A")
+
+print()
+
+if aucs:
+    avg_auc = np.mean(aucs)
+    std_auc = np.std(aucs, ddof=1) if len(aucs) > 1 else 0.0
+    median_auc = np.median(aucs)
+
+    print(f"Average AUC        : {avg_auc:.4f}")
+    print(f"Std AUC            : {std_auc:.4f}")
+    print(f"Median AUC         : {median_auc:.4f}")
+else:
+    print("Average AUC        : N/A")
+
+print("=" * 70)
+
+# Save aggregated summary
+summary = {
+    "num_result_files": len(result_files),
+    "num_datasets": len(datasets),
+    "average_accuracy": float(np.mean(accuracies)) if accuracies else None,
+    "std_accuracy": float(np.std(accuracies, ddof=1)) if len(accuracies) > 1 else None,
+    "median_accuracy": float(np.median(accuracies)) if accuracies else None,
+    "average_auc": float(np.mean(aucs)) if aucs else None,
+    "std_auc": float(np.std(aucs, ddof=1)) if len(aucs) > 1 else None,
+    "median_auc": float(np.median(aucs)) if aucs else None,
+}
+
+summary_file = output_dir / "summary.json"
+
+try:
+    with open(summary_file, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"Summary saved to   : {summary_file}")
+
+except Exception as e:
+    print(f"[WARNING] Could not save summary.json: {e}")
+
+print("=" * 70)
+PY
 # ============================================================
 # Summary
 # ============================================================
