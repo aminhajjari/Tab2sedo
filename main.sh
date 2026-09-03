@@ -19,23 +19,35 @@
 # Configuration
 #=======================================================================
 
-PROJECT_DIR="/home/gkianfar/scratch/Amin/ICC"
+# ============================================================
+# PRODUCTION SLURM SCRIPT
+# Tab2Sedo - All Tabular Datasets
+# ============================================================
 
-TAB2IMG_DIR="$PROJECT_DIR/main/V2I"
+set -e
 
-DATASETS_DIR="$PROJECT_DIR/Unzippeddata/CSV"
+# ============================================================
+# Paths
+# ============================================================
 
-VENV_PATH="$PROJECT_DIR/venvMsc/bin/activate"
+PROJECT_DIR="/home/gkianfar/scratch/Amin"
 
-BATCH_SCRIPT="$TAB2IMG_DIR/run_all_datasets.py"
-MAIN_SCRIPT="$TAB2IMG_DIR/main.py"
+TAB2SEDO_DIR="$PROJECT_DIR/Sedo/Tab2sedo"
 
-RESULTS_BASE="$PROJECT_DIR/output"
+VENV_PATH="/home/gkianfar/scratch/Amin/ICC/venvMsc/bin/activate"
 
-JOB_LOGS_DIR="$PROJECT_DIR/output"
+# Tabular datasets
+DATASETS_DIR="/home/gkianfar/scratch/Amin/ICC/Unzippeddata/CSV"
 
-TIMEOUT_DEFAULT=28800 # 4 hours
+# Image datasets
+IMAGE_DATA_DIR="/home/gkianfar/scratch/Amin/ICC/Unzippeddata/Image"
 
+# Scripts
+MAIN_SCRIPT="$TAB2SEDO_DIR/main.py"
+BATCH_SCRIPT="$TAB2SEDO_DIR/run_all_datasets.py"
+
+# Results
+RESULTS_BASE="$TAB2SEDO_DIR/output"
 
 #=======================================================================
 # Job Information
