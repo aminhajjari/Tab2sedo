@@ -19,12 +19,7 @@
 # Configuration
 #=======================================================================
 
-# ============================================================
-# PRODUCTION SLURM SCRIPT
-# Tab2Sedo - All Tabular Datasets
-# ============================================================
 
-set -e
 
 # ============================================================
 # Paths
@@ -48,7 +43,7 @@ BATCH_SCRIPT="$TAB2SEDO_DIR/run_all_datasets.py"
 
 # Results
 RESULTS_BASE="$TAB2SEDO_DIR/output"
-
+JOB_LOGS_DIR="$RESULTS_BASE/logs"
 #=======================================================================
 # Job Information
 #=======================================================================
@@ -60,7 +55,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Started: $(date)"
 echo "Node: $(hostname)"
 echo "Datasets dir: $DATASETS_DIR"
-echo "Code dir: $TAB2IMG_DIR"
+echo "Code dir: $TAB2SEDO_DIR"
 echo "Output dir: $RESULTS_BASE"
 echo "Configuration:"
 echo "  - Weight Decay: 1e-4 (AdamW)"
@@ -210,7 +205,7 @@ echo "🚀 STARTING BATCH PROCESSING"
 echo "=========================================="
 
 echo "Using:"
-echo "  Code:     $TAB2IMG_DIR"
+echo "  Code:     $TAB2SEDO_DIR"
 echo "  Datasets: $DATASETS_DIR"
 echo "  Output:   $RESULTS_BASE"
 echo "  Datasets: $DATASET_COUNT"
@@ -231,7 +226,7 @@ echo ""
 
 # Run the batch processor
 
-cd "$TAB2IMG_DIR"
+cd "$TAB2SEDO_DIR"
 
 python "$BATCH_SCRIPT" \
     --datasets_dir "$DATASETS_DIR" \
