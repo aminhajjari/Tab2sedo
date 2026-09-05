@@ -13,7 +13,7 @@
 #SBATCH --time=96:00:00
 
 #SBATCH --output=/home/gkianfar/scratch/Amin/Sedo/output/logs/kanV2Idebug_%A.out
-#SBATCH --error=/home/gkianfar/scratch/Amin/Sedo/output/logs/KanV2Idebug_%A.err
+#SBATCH --error=/home/gkianfar/scratch/Amin/Sedo/output/logs/kanV2Idebug_%A.err
 
 #=======================================================================
 # Configuration
