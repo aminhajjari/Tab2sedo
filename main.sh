@@ -44,6 +44,8 @@ BATCH_SCRIPT="$TAB2SEDO_DIR/run_all_datasets.py"
 # Results
 RESULTS_BASE="$TAB2SEDO_DIR/output"
 JOB_LOGS_DIR="$RESULTS_BASE/logs"
+
+TIMEOUT_DEFAULT=14400
 #=======================================================================
 # Job Information
 #=======================================================================
