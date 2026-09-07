@@ -418,12 +418,16 @@ def main():
         print(f"{'='*70}")
         
         # Check if already processed
+                
         if args.skip_existing:
             dataset_name = dataset_path.parent.name
             progress_log_path = os.path.join(subdirs['logs'], 'progress_log.jsonl')
             if os.path.exists(progress_log_path):
                 with open(progress_log_path, 'r') as f:
-                    already_processed = any(dataset_name in line for line in f)
+                    already_processed = any(
+                        json.loads(line).get('dataset') == dataset_name
+                        for line in f if line.strip()
+                    )
                 
                 if already_processed:
                     print(f"⏭️  SKIPPED: {dataset_name} (result found in log)")
