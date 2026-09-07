@@ -36,7 +36,8 @@ DATASETS_DIR="/home/gkianfar/scratch/Amin/ICC/Unzippeddata/CSV"
 
 # Image datasets
 IMAGE_DATA_DIR="/home/gkianfar/scratch/Amin/ICC/Unzippeddata/Image"
-
+RESULTS_BASE="/home/gkianfar/scratch/Amin/Sedo/output"
+JOB_LOGS_DIR="$RESULTS_BASE/logs"
 # Scripts
 MAIN_SCRIPT="$TAB2SEDO_DIR/main.py"
 BATCH_SCRIPT="$TAB2SEDO_DIR/run_all_datasets.py"
