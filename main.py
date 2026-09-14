@@ -18,7 +18,7 @@ import argparse
 import os
 import json
 from datetime import datetime
-from kan_hybrid import KAN
+from kan_hybrid import KAN, HybridKAN
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import warnings
 import scipy.io.arff as arff
@@ -434,6 +434,19 @@ class ImageClassifierHead(nn.Module):
         return self.net(x)
 
 
+class ImageFeatureEncoder(nn.Module):
+    """Conv trunk only — feeds HybridKAN's fusion, not a classifier itself."""
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+            nn.Flatten(),
+        )
+    def forward(self, x):
+        return self.net(x) 
+
+
 def supcon_loss(z, labels, temperature=0.1):
     """Supervised contrastive loss on the CVAE latent z."""
     z = F.normalize(z, dim=1)
@@ -522,13 +535,18 @@ class CAEWithTabEmbedding(nn.Module):
             nn.Linear(128, 28*28),
             nn.Sigmoid()
         )
-        self.final_classifier = ImageClassifierHead(num_classes=num_classes)
-        self.gate = nn.Sequential(
-            nn.Linear(tab_latent_size + num_classes, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1),
-            nn.Sigmoid()
+        self.final_classifier = ImageClassifierHead(num_classes=num_classes)  # kept for img-only diagnostic accuracy
+        self.hybrid = HybridKAN(
+            image_encoder=ImageFeatureEncoder(),
+            n_features=input_dim,
+            n_outputs=num_classes,
+            img_feat_dim=64 * 7 * 7,
+            kan_neurons=tab_latent_size,
+            fusion="bottleneck",
+            bottleneck_dim=16,
+            grid_range=(-5.0, 5.0),   # matches your StandardScaler'd feature range
         )
+        # self.gate removed — HybridKAN's Final KAN replaces the sigmoid blend
     def encode(self, x, tab_embedding, vif_embedding):
         return self.encoder(torch.cat([x, tab_embedding, vif_embedding], dim=1))
     def decode(self, z, tab_embedding, vif_embedding):
@@ -541,9 +559,9 @@ class CAEWithTabEmbedding(nn.Module):
         tab_embedding, tab_pred = self.mlp(tab_data)
         z = self.encode(x, tab_embedding, vif_embedding)
         recon_x = self.decode(z, tab_embedding, vif_embedding)
-        img_pred = self.final_classifier(recon_x.view(-1, 1, 28, 28))
-        alpha = self.gate(torch.cat([tab_embedding, img_pred], dim=1))
-        fused_pred = alpha * img_pred + (1 - alpha) * tab_pred
+        recon_img = recon_x.view(-1, 1, 28, 28)
+        img_pred = self.final_classifier(recon_img)          # unchanged — diagnostic only now
+        fused_pred = self.hybrid(tab_data, recon_img)         # HybridKAN: embeddings fused through Final KAN
         return recon_x, tab_pred, img_pred, fused_pred, z
 
 print("[INFO] Creating model...")
