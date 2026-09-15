@@ -345,7 +345,14 @@ def calculate_vif_safe(X_data):
 X_sample = X_train[:min(1000, len(X_train))]
 vif_values = calculate_vif_safe(X_sample)
 print(f"[INFO] VIF calculated. Mean: {vif_values.mean():.2f}, Max: {vif_values.max():.2f}")
-
+#####
+print("[INFO] Building VIF-based graph attention prior...")
+corr_matrix = np.corrcoef(X_train.T)
+corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
+vif_prior = 1.0 / (1.0 + np.abs(corr_matrix))
+np.fill_diagonal(vif_prior, 0.0)                     # no self-edges, GAT adds those internally
+vif_prior_tensor = torch.tensor(vif_prior, dtype=torch.float32, device=DEVICE)
+#####
 print("[INFO] Preparing synchronized image-tabular datasets...")
 train_tabular_label_counts = torch.bincount(train_tabular_dataset.tensors[1], minlength=num_classes)
 test_tabular_label_counts = torch.bincount(test_tabular_dataset.tensors[1], minlength=num_classes)
@@ -517,7 +524,7 @@ class VIFInitialization(nn.Module):
         return x
 
 class CAEWithTabEmbedding(nn.Module):
-    def __init__(self, input_dim, tab_latent_size, num_classes, latent_size=8, vif_values=None):
+    def __init__(self, input_dim, tab_latent_size, num_classes, latent_size=8, vif_values=None, vif_prior=None):
         super(CAEWithTabEmbedding, self).__init__()
         self.mlp = KANTabularBranch(input_dim, tab_latent_size, num_classes)
         if vif_values is not None:
@@ -545,6 +552,7 @@ class CAEWithTabEmbedding(nn.Module):
             fusion="bottleneck",
             bottleneck_dim=16,
             grid_range=(-5.0, 5.0),   # matches your StandardScaler'd feature range
+            vif_prior=vif_prior,  
         )
         # self.gate removed — HybridKAN's Final KAN replaces the sigmoid blend
     def encode(self, x, tab_embedding, vif_embedding):
@@ -570,7 +578,8 @@ cae = CAEWithTabEmbedding(
     tab_latent_size=tab_latent_size,
     num_classes=num_classes,
     latent_size=8,
-    vif_values=vif_values
+    vif_values=vif_values,
+    vif_prior=vif_prior_tensor, 
 ).to(DEVICE)
 #optimizer = optim.AdamW(cae.parameters(), lr=0.001, weight_decay=1e-4)
 #optimizer = ADOPT(cae.parameters(), lr=0.001, decouple=True, weight_decay=1e-4)
