@@ -35,7 +35,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from torch_geometric.nn import GATv2Conv
+from torch_geometric.data import Data, Batch
 
 # --------------------------------------------------------------------------- #
 #  KAN
@@ -195,7 +196,40 @@ class KAN(nn.Module):
     def regularisation_loss(self, l1: float = 1.0, entropy: float = 1.0) -> torch.Tensor:
         return sum(layer.regularisation_loss(l1, entropy) for layer in self.layers)
 
+class VIFGraphAttentionBranch(nn.Module):
+    def __init__(self, n_features, hidden_dim, out_dim, vif_prior, heads=4):
+        super().__init__()
+        self.n_features = n_features
+        self.register_buffer("vif_bias", vif_prior)          # [n_features, n_features]
+        ei = torch.combinations(torch.arange(n_features), r=2).T
+        ei = torch.cat([ei, ei.flip(0)], dim=1)
+        self.register_buffer("edge_index_single", ei)
+        self.gat1 = GATv2Conv(1, hidden_dim, heads=heads, edge_dim=1)
+        self.gat2 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=1, edge_dim=1)
+        self.readout = nn.Linear(hidden_dim, out_dim)
 
+    def forward(self, x):                                     # x: [B, n_features]
+        B, N = x.shape
+        edge_attr_single = self.vif_bias[self.edge_index_single[0], self.edge_index_single[1]].unsqueeze(-1)
+        data_list = [
+            Data(x=x[b].unsqueeze(-1), edge_index=self.edge_index_single, edge_attr=edge_attr_single)
+            for b in range(B)
+        ]
+        batch = Batch.from_data_list(data_list).to(x.device)
+        h = F.elu(self.gat1(batch.x, batch.edge_index, batch.edge_attr))
+        h = self.gat2(h, batch.edge_index, batch.edge_attr)
+        h = h.view(B, N, -1).mean(dim=1)                       # mean-pool per graph
+        return self.readout(h)
+
+    @torch.no_grad()
+    def edge_attention(self, x):
+        """Returns the learned attention per edge for the interpretability figure."""
+        _, (edge_index, alpha) = self.gat1(
+            x[0].unsqueeze(-1), self.edge_index_single,
+            self.vif_bias[self.edge_index_single[0], self.edge_index_single[1]].unsqueeze(-1),
+            return_attention_weights=True,
+        )
+        return edge_index, alpha
 # --------------------------------------------------------------------------- #
 #  Hybrid: your image encoder + KAN branch + fusion + Final KAN
 # --------------------------------------------------------------------------- #
@@ -236,6 +270,8 @@ class HybridKAN(nn.Module):
         alpha: float = 0.1,
         gate_hidden: int = 32,
         grid_range: tuple[float, float] = (-1.0, 1.0),
+        vif_prior: torch.Tensor | None = None,  
+        gnn_hidden: int = 16,   
     ):
         super().__init__()
         assert fusion in {"direct", "bottleneck", "scaled", "gated"}
@@ -251,7 +287,13 @@ class HybridKAN(nn.Module):
 
         # symbolic branch on the raw tabular features
         self.kan_branch = KAN([n_features, kan_neurons], grid_size, spline_order, grid_range)
-
+        # --- new: graph attention branch ---
+        self.use_gnn = vif_prior is not None
+        if self.use_gnn:
+            self.gnn_branch = VIFGraphAttentionBranch(n_features, gnn_hidden, kan_neurons, vif_prior)
+            self.gnn_dim = kan_neurons
+        else:
+            self.gnn_dim = 0
         if fusion == "bottleneck":
             self.cnn_proj = nn.Linear(img_feat_dim, bottleneck_dim)
             cnn_dim = bottleneck_dim
@@ -270,39 +312,38 @@ class HybridKAN(nn.Module):
         self.kan_dim, self.cnn_dim = kan_neurons, cnn_dim
         # Final KAN sees [kan_part | cnn_part]; index 0..kan_dim-1 is symbolic
         self.final_kan = KAN(
-            [kan_neurons + cnn_dim, n_outputs], grid_size, spline_order, grid_range
+            [kan_neurons + cnn_dim + self.gnn_dim, n_outputs], grid_size, spline_order, grid_range
         )
 
-    def fuse(self, x_tab: torch.Tensor, x_img: torch.Tensor) -> torch.Tensor:
+    def fuse(self, x_tab, x_img):
         kan_out = self.kan_branch(x_tab)
         cnn_out = self.cnn_proj(self.image_encoder(x_img))
-
         if self.fusion == "scaled":
             cnn_out = cnn_out * self.alpha
         elif self.fusion == "gated":
-            g = self.gate_net(torch.cat([kan_out, cnn_out], dim=1))   # [B, 1] in [0,1]
+            g = self.gate_net(torch.cat([kan_out, cnn_out], dim=1))
             kan_out, cnn_out = kan_out * (1 - g), cnn_out * g
-        return torch.cat([kan_out, cnn_out], dim=1)
+        parts = [kan_out, cnn_out]
+        if self.use_gnn:
+            parts.append(self.gnn_branch(x_tab))
+        return torch.cat(parts, dim=1)
 
     def forward(self, x_tab: torch.Tensor, x_img: torch.Tensor) -> torch.Tensor:
         return self.final_kan(self.fuse(x_tab, x_img))
 
     # ---- interpretability -------------------------------------------------- #
-    @torch.no_grad()
-    def branch_weights(self, x_tab: torch.Tensor, x_img: torch.Tensor) -> tuple[float, float]:
-        """
-        Modality Dominance Ratio (paper Sec. 7.1): the share of the Final KAN's
-        input relevance that comes from the symbolic vs. the visual block.
-        Returns (w_kan, w_cnn), summing to 1.
-        """
-        s = self.final_kan.feature_score(self.fuse(x_tab, x_img), normalise=True)
-        w_kan = s[: self.kan_dim].sum().item()
-        return w_kan, 1.0 - w_kan
-
-    @torch.no_grad()
-    def kan_feature_score(self, x_tab: torch.Tensor) -> torch.Tensor:
-        """Per-input-feature symbolic relevance, [n_features], sums to 1."""
-        return self.kan_branch.feature_score(x_tab)
+   @torch.no_grad()
+   def branch_weights(self, x_tab, x_img):
+       s = self.final_kan.feature_score(self.fuse(x_tab, x_img), normalise=True)
+       w_kan = s[: self.kan_dim].sum().item()
+       w_cnn = s[self.kan_dim : self.kan_dim + self.cnn_dim].sum().item()
+       w_gnn = s[self.kan_dim + self.cnn_dim :].sum().item() if self.use_gnn else 0.0
+       return w_kan, w_cnn, w_gnn
+    
+        @torch.no_grad()
+        def kan_feature_score(self, x_tab: torch.Tensor) -> torch.Tensor:
+            """Per-input-feature symbolic relevance, [n_features], sums to 1."""
+            return self.kan_branch.feature_score(x_tab)
 
 
 # --------------------------------------------------------------------------- #
