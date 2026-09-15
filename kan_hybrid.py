@@ -332,19 +332,18 @@ class HybridKAN(nn.Module):
         return self.final_kan(self.fuse(x_tab, x_img))
 
     # ---- interpretability -------------------------------------------------- #
-   @torch.no_grad()
-   def branch_weights(self, x_tab, x_img):
-       s = self.final_kan.feature_score(self.fuse(x_tab, x_img), normalise=True)
-       w_kan = s[: self.kan_dim].sum().item()
-       w_cnn = s[self.kan_dim : self.kan_dim + self.cnn_dim].sum().item()
-       w_gnn = s[self.kan_dim + self.cnn_dim :].sum().item() if self.use_gnn else 0.0
-       return w_kan, w_cnn, w_gnn
-    
-        @torch.no_grad()
-        def kan_feature_score(self, x_tab: torch.Tensor) -> torch.Tensor:
-            """Per-input-feature symbolic relevance, [n_features], sums to 1."""
-            return self.kan_branch.feature_score(x_tab)
+    @torch.no_grad()
+    def branch_weights(self, x_tab, x_img):
+        s = self.final_kan.feature_score(self.fuse(x_tab, x_img), normalise=True)
+        w_kan = s[: self.kan_dim].sum().item()
+        w_cnn = s[self.kan_dim : self.kan_dim + self.cnn_dim].sum().item()
+        w_gnn = s[self.kan_dim + self.cnn_dim :].sum().item() if self.use_gnn else 0.0
+        return w_kan, w_cnn, w_gnn
 
+    @torch.no_grad()
+    def kan_feature_score(self, x_tab: torch.Tensor) -> torch.Tensor:
+        """Per-input-feature symbolic relevance, [n_features], sums to 1."""
+        return self.kan_branch.feature_score(x_tab)
 
 # --------------------------------------------------------------------------- #
 #  Grad-CAM on the image branch, and the Global Feature Score
@@ -443,7 +442,7 @@ if __name__ == "__main__":
         model = HybridKAN(encoder, N_FEAT, N_CLS, img_shape=IMG, fusion=mode)
         xt, xi = torch.rand(B, N_FEAT), torch.rand(B, *IMG)
         y = model(xt, xi)
-        wk, wc = model.branch_weights(xt, xi)
+        wk, wc, wg = model.branch_weights(xt, xi)
         ks = model.kan_feature_score(xt)
         cam = grad_cam(model, encoder[4], xt, xi, target_index=0)
         cs = cam_to_feature_scores(
