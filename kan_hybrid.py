@@ -197,12 +197,20 @@ class KAN(nn.Module):
         return sum(layer.regularisation_loss(l1, entropy) for layer in self.layers)
 
 class VIFGraphAttentionBranch(nn.Module):
-    def __init__(self, n_features, hidden_dim, out_dim, vif_prior, heads=4):
+    def __init__(self, n_features, hidden_dim, out_dim, vif_prior, heads=4, max_neighbors=32):
         super().__init__()
         self.n_features = n_features
         self.register_buffer("vif_bias", vif_prior)          # [n_features, n_features]
-        ei = torch.combinations(torch.arange(n_features), r=2).T
-        ei = torch.cat([ei, ei.flip(0)], dim=1)
+
+        k = min(max_neighbors, n_features - 1)
+        masked = vif_prior.clone()
+        masked.fill_diagonal_(float("inf"))           # exclude self as a neighbour
+        _, topk_idx = torch.topk(masked, k=k, dim=1, largest=False)
+        src = torch.arange(n_features).unsqueeze(1).expand(-1, k).reshape(-1)
+        dst = topk_idx.reshape(-1)
+        ei = torch.stack([src, dst], dim=0)
+        ei = torch.cat([ei, ei.flip(0)], dim=1)        # make symmetric
+        ei = torch.unique(ei, dim=1)                   # drop duplicate reciprocal edges
         self.register_buffer("edge_index_single", ei)
         self.gat1 = GATv2Conv(1, hidden_dim, heads=heads, edge_dim=1)
         self.gat2 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=1, edge_dim=1)
