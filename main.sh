@@ -237,6 +237,14 @@ python "$BATCH_SCRIPT" \
 
 EXIT_CODE=$?
 
+python "$BATCH_SCRIPT" \
+    --datasets_dir "$DATASETS_DIR" \
+    --output_base "$RESULTS_BASE" \
+    --job_id "$SLURM_JOB_ID" \
+    --script_path "$MAIN_SCRIPT" \
+    --timeout "$TIMEOUT_DEFAULT" \
+    --skip_existing \
+    --main_args "--proj auto --self_explain"
 
 #=======================================================================
 # Final Summary
