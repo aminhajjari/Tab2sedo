@@ -24,6 +24,8 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 import warnings
 import scipy.io.arff as arff
 from tqdm import tqdm
+from self_explain import NeighborhoodContext, KANReasoner, XHybridKAN, explain_batch, build_prompt
+
 #from adopt import ADOPT 
 
 # ========== ARGUMENT PARSER ==========
