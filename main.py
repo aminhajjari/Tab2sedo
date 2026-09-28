@@ -1058,7 +1058,8 @@ print("="*60)
 
 # Load/save your results history
 RUN_TAG = PROJ_MODE + ("_frozen" if (PROJ_MODE != 'none' and args.freeze_proj) else "") + \
-          (f"_vif{LAMBDA_VIF:g}" if PROJ_MODE != 'none' else "")
+          (f"_vif{LAMBDA_VIF:g}" if PROJ_MODE != 'none' else "") + \
+          (f"_sx{args.ctx_k}" if args.self_explain else "")   # keep self-explain runs separate
 RESULTS_FILE = f"/home/gkianfar/scratch/Amin/Sedo/output/my_model_wins_{RUN_TAG}.json"  # one file per config (safe for array jobs)
 if os.path.exists(RESULTS_FILE):
     with open(RESULTS_FILE, 'r') as f:
@@ -1153,7 +1154,7 @@ if cae.use_ctx:
     S = torch.cat(shares).mean(0).tolist()
     expl_summary = {'mean_share_tab': S[0], 'mean_share_img': S[1], 'mean_share_ctx': S[2]}
     print(f"[INFO] Mean local modality share  tab={S[0]:.3f}  img={S[1]:.3f}  ctx={S[2]:.3f}")
-    expl_path = os.path.join(save_dir, 'explanations.json')
+    expl_path = os.path.join(save_dir, f'explanations_{RUN_TAG}.json')  # unique per config
     with open(expl_path, 'w') as f:
         json.dump(records, f, indent=2)
     print(f"[INFO] Saved {len(records)} per-sample explanations to: {expl_path}")
