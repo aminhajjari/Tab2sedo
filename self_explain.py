@@ -217,7 +217,8 @@ def explain_batch(model, x_raw, x_img, c, target=None):
     model: CAE with .proj (or None), .hybrid (XHybridKAN), .reasoner (KANReasoner).
     Returns a dict of per-sample explanations for the fused prediction.
     """
-    tab = model.proj(x_raw) if model.proj is not None else x_raw
+    proj = getattr(model, "proj", None)                # None for the HybridKAN-only variant
+    tab = proj(x_raw) if proj is not None else x_raw
     e = model.reasoner(c)
     h = model.hybrid
     fused_in = h.fuse(tab, x_img, e)
@@ -231,8 +232,8 @@ def explain_batch(model, x_raw, x_img, c, target=None):
     share = blocks.abs() / (blocks.abs().sum(1, keepdim=True) + 1e-12)   # local MDR
 
     r_feat = kan_local_relevance(h.kan_branch, tab, r_in[:, :a])   # [B, k]
-    if model.proj is not None:
-        r_feat = projection_local_relevance(model.proj, x_raw, r_feat)   # [B, p]
+    if proj is not None:
+        r_feat = projection_local_relevance(proj, x_raw, r_feat)         # [B, p]
     r_ctx = kan_local_relevance(model.reasoner.kan, c, r_in[:, b:])      # [B, d_ctx]
 
     return dict(pred=pred, prob=F.softmax(logits, 1).gather(1, pred[:, None]).squeeze(1),
