@@ -161,7 +161,9 @@ class SupervisedProjection(nn.Module):
         return self.V / self.V.norm(dim=0, keepdim=True).clamp_min(1e-8) * self.col_norm
 
     def forward(self, x):
-        return ((x - self.x_mean) @ self.weight() - self.t_mu) / self.t_sd
+        dev = x.device
+        w = self.weight().to(dev)
+        return ((x - self.x_mean.to(dev)) @ w - self.t_mu.to(dev)) / self.t_sd.to(dev)
 
     @torch.no_grad()
     def backproject(self, comp_scores: torch.Tensor) -> torch.Tensor:
