@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 """
 Batch processor for Table2Image-VIF across all OpenML datasets
 Enhanced with Weight Decay 
