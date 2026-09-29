@@ -19,7 +19,6 @@ import os
 import json
 from datetime import datetime
 from kan_hybrid import KAN, HybridKAN
-from pls_projection import fit_projection, SupervisedProjection, vif_loss, batch_vif
 from self_explain import NeighborhoodContext, KANReasoner, XHybridKAN, explain_batch, build_prompt
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import warnings
@@ -35,28 +34,13 @@ parser.add_argument('--save_dir', type=str, required=False, default=None,
                    help='Directory to save results (optional, for compatibility)')
 parser.add_argument('--num_images', type=int, default=20,
                    help='Number of sample images to save (default: 20)')
-# ---- Supervised Decorrelated Projection (PLS) ----
-parser.add_argument('--proj', type=str, default='auto', choices=['auto', 'pls', 'pca', 'none'],
-                   help="Input projection: pls (proposed), pca (ablation), none (original), "
-                        "auto = pls when #features > --auto_min_features, else none")
-parser.add_argument('--auto_min_features', type=int, default=32)
-parser.add_argument('--proj_k', type=int, default=None, help='Fixed #components (default: adaptive)')
-parser.add_argument('--proj_kmax', type=int, default=32, help='Upper bound for adaptive k')
-parser.add_argument('--proj_var', type=float, default=0.95,
-                   help='Adaptive k keeps this fraction of the attainable R2_Y (PLS) / R2_X (PCA)')
-parser.add_argument('--freeze_proj', action='store_true',
-                   help='Ablation: keep the projection fixed (= plain PLS preprocessing)')
-parser.add_argument('--lambda_vif', type=float, default=1.0,
-                   help='Weight of the differentiable VIF regulariser on the latent scores')
-parser.add_argument('--proj_lr_scale', type=float, default=0.1,
-                   help='LR multiplier for the projection (small = refine PLS, not relearn it)')
-
 # ---- X-Row self-explanation (neighbourhood context + KAN Reasoner) ----
 parser.add_argument('--self_explain', action='store_true',
                    help='Add kNN context + KAN Reasoner as a third block of the Final KAN')
 parser.add_argument('--ctx_k', type=int, default=10, help='#neighbours for the context graph')
 parser.add_argument('--expl_dim', type=int, default=4, help='Dimension of explanation vector e')
 parser.add_argument('--lambda_faith', type=float, default=0.1, help='Weight of faithfulness loss')
+
 args = parser.parse_args()
 
 # ========== PARAMETERS ==========
@@ -327,45 +311,24 @@ class ModifiedLabelDataset(Dataset):
 
 modified_mnist_dataset = ModifiedLabelDataset(mnist_dataset, label_offset=10)
 
+print("[INFO] Standardizing features...")
+scaler = StandardScaler()
+X = scaler.fit_transform(X)
+
 print("[INFO] Splitting into train/test (80/20)...")
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
-print("[INFO] Standardizing features (fit on train only)...")
-scaler = StandardScaler().fit(X_train)
-X_train, X_test = scaler.transform(X_train), scaler.transform(X_test)
-
-# ---------- Supervised Decorrelated Projection ----------
-PROJ_MODE = args.proj
-if PROJ_MODE == 'auto':
-    PROJ_MODE = 'pls' if n_cont_features > args.auto_min_features else 'none'
-LAMBDA_VIF = args.lambda_vif if PROJ_MODE != 'none' else 0.0
-projection, proj_info = None, {"method": "none", "k": n_cont_features}
-if PROJ_MODE != 'none':
-    print(f"[INFO] Fitting {PROJ_MODE.upper()} projection on training data...")
-    W_init, x_mean_init, proj_info = fit_projection(
-        PROJ_MODE, X_train, y_train, num_classes,
-        k=args.proj_k, k_max=args.proj_kmax, var_keep=args.proj_var)
-    projection = SupervisedProjection(W_init, x_mean_init, X_train,
-                                      trainable=not args.freeze_proj)
-    extra = f"train R2_Y={proj_info['r2y']:.3f}, held-out R2_Y={proj_info['r2y_val']}" if PROJ_MODE == 'pls' \
-        else f"R2_X={proj_info['r2x']:.3f}"
-    print(f"[INFO] {PROJ_MODE.upper()}: {n_cont_features} features -> k={proj_info['k']} "
-          f"components ({extra}); trainable={not args.freeze_proj}, lambda_vif={LAMBDA_VIF}")
-model_input_dim = proj_info['k']
-tab_latent_size = model_input_dim + 4
 print(f"[INFO] Train samples: {len(X_train)}, Test samples: {len(X_test)}")
 
-# ---------- X-Row: neighbourhood context (graph on the INITIAL projection) ----------
+# ---------- X-Row: neighbourhood context (kNN graph over TRAIN rows, standardised features) ----------
 P_RAW = X_train.shape[1]                     # raw feature columns in the tabular tensor
 D_CTX, D_EXPL, LAMBDA_FAITH = 0, args.expl_dim, args.lambda_faith
 ctx_builder, C_train, C_test = None, None, None
 if args.self_explain:
-    T0_tr = projection.transform_numpy(X_train) if projection is not None else X_train
-    T0_te = projection.transform_numpy(X_test)  if projection is not None else X_test
-    ctx_builder = NeighborhoodContext(k=args.ctx_k).fit(T0_tr, y_train, num_classes)
-    C_train = ctx_builder.transform(T0_tr, is_train=True)   # train rows exclude themselves
-    C_test  = ctx_builder.transform(T0_te)                  # neighbours = train rows only
+    ctx_builder = NeighborhoodContext(k=args.ctx_k).fit(X_train, y_train, num_classes)
+    C_train = ctx_builder.transform(X_train, is_train=True)   # train rows exclude themselves
+    C_test  = ctx_builder.transform(X_test)                   # neighbours = train rows only
     D_CTX = C_train.shape[1]
     print(f"[INFO] Self-explain: context dim {D_CTX} ({ctx_builder.names}), e dim {D_EXPL}")
 
@@ -391,10 +354,8 @@ def calculate_vif_safe(X_data):
         for i in range(n_features):
             try:
                 vif = variance_inflation_factor(df_vif.values, i)
-                if np.isnan(vif):
+                if np.isnan(vif) or np.isinf(vif):
                     vif = 1.0
-                elif np.isinf(vif):
-                    vif = 100.0   # perfectly collinear -> maximal VIF (was wrongly 1.0)
             except:
                 vif = 1.0
             vif_values.append(vif)
@@ -403,8 +364,6 @@ def calculate_vif_safe(X_data):
     return vif_values
 
 X_sample = X_train[:min(1000, len(X_train))]
-if projection is not None:
-    X_sample = projection.transform_numpy(X_sample)   # VIF of latent components (k x k, cheap)
 vif_values = calculate_vif_safe(X_sample)
 print(f"[INFO] VIF calculated. Mean: {vif_values.mean():.2f}, Max: {vif_values.max():.2f}")
 
@@ -579,11 +538,9 @@ class VIFInitialization(nn.Module):
         return x
 
 class CAEWithTabEmbedding(nn.Module):
-    def __init__(self, input_dim, tab_latent_size, num_classes, latent_size=8, vif_values=None,
-                 projection=None):
+    def __init__(self, input_dim, tab_latent_size, num_classes, latent_size=8, vif_values=None):
         super(CAEWithTabEmbedding, self).__init__()
-        self.proj = projection          # SupervisedProjection (p -> k) or None
-        self.last_latent = None
+        self.proj = None                 # no input projection in this variant
         self.mlp = KANTabularBranch(input_dim, tab_latent_size, num_classes)
         if vif_values is not None:
             self.vif_model = VIFInitialization(input_dim, vif_values)
@@ -627,9 +584,6 @@ class CAEWithTabEmbedding(nn.Module):
         c = None
         if self.use_ctx:
             tab_data, c = tab_data[:, :P_RAW], tab_data[:, P_RAW:]   # split raw features | context
-        if self.proj is not None:
-            tab_data = self.proj(tab_data)       # [B, p] -> [B, k] decorrelated scores
-        self.last_latent = tab_data
         if self.vif_model is not None:
             vif_embedding = self.vif_model(tab_data)
         else:
@@ -649,25 +603,16 @@ class CAEWithTabEmbedding(nn.Module):
 
 print("[INFO] Creating model...")
 cae = CAEWithTabEmbedding(
-    input_dim=model_input_dim,
+    input_dim=n_cont_features,
     tab_latent_size=tab_latent_size,
     num_classes=num_classes,
     latent_size=8,
-    vif_values=vif_values,
-    projection=projection
+    vif_values=vif_values
 ).to(DEVICE)
 #optimizer = optim.AdamW(cae.parameters(), lr=0.001, weight_decay=1e-4)
 #optimizer = ADOPT(cae.parameters(), lr=0.001, decouple=True, weight_decay=1e-4)
 #optimizer = ADOPT(cae.parameters(), lr=0.001, decouple=True)
-if cae.proj is not None:
-    proj_params = [cae.proj.V]
-    other_params = [p_ for n_, p_ in cae.named_parameters() if not n_.startswith('proj.')]
-    optimizer = optim.AdamW([
-        {'params': other_params},
-        {'params': proj_params, 'lr': 0.001 * args.proj_lr_scale, 'weight_decay': 0.0},
-    ], lr=0.001, weight_decay=1e-4)
-else:
-    optimizer = optim.AdamW(cae.parameters(), lr=0.001, weight_decay=1e-4)
+optimizer = optim.AdamW(cae.parameters(), lr=0.001, weight_decay=1e-4)
 
 print(f"[INFO] Model created with {sum(p.numel() for p in cae.parameters())} parameters")
 # ============================================================
@@ -704,8 +649,6 @@ def train(model, train_data_loader, optimizer, epoch):
         x_rand = torch.Tensor(random_array).to(DEVICE)
         recon_x, tab_pred, img_pred, fused_pred, z = model(x_rand, tab_data)
         loss = loss_function(recon_x, img_data, tab_pred, tab_label, img_pred, img_label, fused_pred, z)
-        if model.proj is not None and LAMBDA_VIF > 0 and model.proj.V.requires_grad:
-            loss = loss + LAMBDA_VIF * vif_loss(model.last_latent)
         if model.use_ctx and LAMBDA_FAITH > 0:
             loss = loss + LAMBDA_FAITH * model.reasoner.faithfulness_loss(
                 model.last_e, model.last_c, model.last_h)
@@ -1022,33 +965,13 @@ print(f"Best Accuracy: {best_accuracy:.2f}% at epoch {best_epoch}")
 print(f"Best AUC: {best_auc:.4f}")
 print("="*70 + "\n")
 cae.eval()
-proj_diag = {}
 with torch.no_grad():
     xb = torch.tensor(X_train[:512], dtype=torch.float32, device=DEVICE)
-    if cae.proj is not None:
-        tb = cae.proj(xb)
-        comp_scores = cae.mlp.feature_score(tb)                  # relevance of k components
-        scores = cae.proj.backproject(comp_scores).cpu().numpy() # mapped back to p features
-        print("Top KAN component importances:")
-        for c in torch.argsort(comp_scores, descending=True)[:10].tolist():
-            print(f"  component {c:3d}  {comp_scores[c].item():.4f}")
-        xt = torch.tensor(X_test, dtype=torch.float32, device=DEVICE)
-        vif_T = batch_vif(cae.proj(xt), shrink=0.0).cpu().numpy() if len(X_test) > model_input_dim + 2 else None
-        proj_diag['latent_vif_test_mean'] = float(np.mean(vif_T)) if vif_T is not None else None
-        proj_diag['latent_vif_test_max'] = float(np.max(vif_T)) if vif_T is not None else None
-        W_now = cae.proj.weight().cpu().numpy()
-        cosines = np.sum(W_now * W_init, 0) / (np.linalg.norm(W_now, axis=0) * np.linalg.norm(W_init, axis=0) + 1e-12)
-        proj_diag['mean_cos_to_init'] = float(np.mean(np.abs(cosines)))  # how far training moved W
-        if 'vip' in proj_info:
-            from scipy.stats import spearmanr
-            proj_diag['spearman_kan_vs_vip'] = float(spearmanr(scores, proj_info['vip']).correlation)
-        print(f"[INFO] Projection diagnostics: {proj_diag}")
-    else:
-        scores = cae.mlp.feature_score(xb).cpu().numpy()
+    scores = cae.mlp.feature_score(xb).cpu().numpy()
 importances = sorted(zip(X_df.columns.tolist(), scores), key=lambda t: t[1], reverse=True)
-print("Top KAN feature importances (original features):")
+print("Top KAN feature importances:")
 for name, s in importances[:15]:
-    print(f"  {str(name):30s} {s:.4f}")
+    print(f"  {name:30s} {s:.4f}")
 
 ################################################################
 # AUTOMATIC # OF WINS TRACKER - ADD AFTER TRAINING
@@ -1057,10 +980,10 @@ print("YOUR MODEL BENCHMARK RESULTS")
 print("="*60)
 
 # Load/save your results history
-RUN_TAG = PROJ_MODE + ("_frozen" if (PROJ_MODE != 'none' and args.freeze_proj) else "") + \
-          (f"_vif{LAMBDA_VIF:g}" if PROJ_MODE != 'none' else "") + \
-          (f"_sx{args.ctx_k}" if args.self_explain else "")   # keep self-explain runs separate
-RESULTS_FILE = f"/home/gkianfar/scratch/Amin/Sedo/output/my_model_wins_{RUN_TAG}.json"  # one file per config (safe for array jobs)
+RUN_TAG = f"hybrid_sx{args.ctx_k}" if args.self_explain else "hybrid"
+# baseline keeps its original file name; self-explain runs get their own file
+RESULTS_FILE = ("/home/gkianfar/scratch/Amin/Sedo/output/my_model_wins.json" if not args.self_explain
+                else f"/home/gkianfar/scratch/Amin/Sedo/output/my_model_wins_{RUN_TAG}.json")
 if os.path.exists(RESULTS_FILE):
     with open(RESULTS_FILE, 'r') as f:
         history = json.load(f)
@@ -1073,8 +996,7 @@ history.append({
     'auc': round(best_auc, 4),
     'features': n_cont_features,
     'classes': num_classes,
-    'projection': PROJ_MODE,
-    'k': model_input_dim,
+    'self_explain': bool(args.self_explain),
     'date': datetime.now().strftime("%Y-%m-%d")
 })
 
@@ -1124,23 +1046,20 @@ if cae.use_ctx:
     records, shares = [], []
     with torch.no_grad():
         for start in range(0, len(X_test), 256):
-            xb_ = torch.tensor(X_test[start:start + 256], dtype=torch.float32, device=DEVICE)
+            X_blk = X_test[start:start + 256]
+            xb_ = torch.tensor(X_blk, dtype=torch.float32, device=DEVICE)
             cb_ = torch.tensor(C_test[start:start + 256], dtype=torch.float32, device=DEVICE)
             noise = torch.rand(len(xb_), 28 * 28, device=DEVICE)
             recon_x, *_ = cae(noise, torch.cat([xb_, cb_], 1))       # generated images
             ex = explain_batch(cae, xb_, recon_x.view(-1, 1, 28, 28), cb_)
-            shares.append(ex['modality_share'].cpu())
-            ctx_raw = ctx_builder.transform(
-                projection.transform_numpy(X_test[start:start + 256]) if projection is not None
-                else X_test[start:start + 256], standardise=False)
-            _, nbr_lab = ctx_builder.neighbours(
-                projection.transform_numpy(X_test[start:start + 256]) if projection is not None
-                else X_test[start:start + 256], n=3)
+            ex_cpu = {k_: v_.cpu() for k_, v_ in ex.items()}
+            shares.append(ex_cpu['modality_share'])
+            ctx_raw = ctx_builder.transform(X_blk, standardise=False)
+            _, nbr_lab = ctx_builder.neighbours(X_blk, n=3)
             for i in range(len(xb_)):
                 g = start + i
-                pred_i, true_i = int(ex['pred'][i]), int(y_test[g])
+                pred_i, true_i = int(ex_cpu['pred'][i]), int(y_test[g])
                 if pred_i != true_i or len(records) < 20:   # all errors + a few correct ones
-                    ex_cpu = {k_: v_.cpu() for k_, v_ in ex.items()}
                     records.append({
                         'test_index': g, 'true': class_names[true_i], 'pred': class_names[pred_i],
                         'prob': float(ex_cpu['prob'][i]),
@@ -1154,7 +1073,7 @@ if cae.use_ctx:
     S = torch.cat(shares).mean(0).tolist()
     expl_summary = {'mean_share_tab': S[0], 'mean_share_img': S[1], 'mean_share_ctx': S[2]}
     print(f"[INFO] Mean local modality share  tab={S[0]:.3f}  img={S[1]:.3f}  ctx={S[2]:.3f}")
-    expl_path = os.path.join(save_dir, f'explanations_{RUN_TAG}.json')  # unique per config
+    expl_path = os.path.join(save_dir, f'explanations_{RUN_TAG}.json')
     with open(expl_path, 'w') as f:
         json.dump(records, f, indent=2)
     print(f"[INFO] Saved {len(records)} per-sample explanations to: {expl_path}")
@@ -1176,15 +1095,7 @@ results = {
     'images_dir': save_dir,
     'trainable_params': num_params,  
     'matches_table2': (num_classes == 2 and n_cont_features == 78),  
-    'projection': PROJ_MODE,
-    'proj_trainable': (PROJ_MODE != 'none' and not args.freeze_proj),
-    'lambda_vif': LAMBDA_VIF,
-    'model_input_dim': model_input_dim,
-    'proj_r2y': proj_info.get('r2y'),
-    'proj_r2y_val': proj_info.get('r2y_val'),
-    'proj_r2x': proj_info.get('r2x'),
-    **proj_diag,
-    'self_explain': bool(cae.use_ctx),
+    'self_explain': bool(args.self_explain),
     **expl_summary,
     'timestamp': datetime.now().isoformat()
 }
