@@ -173,6 +173,9 @@ class SupervisedProjection(nn.Module):
         s = A @ comp_scores
         return s / (s.sum() + 1e-12)
 
+    
     @torch.no_grad()
-    def transform_numpy(self, X, device="cpu"):
+    def transform_numpy(self, X, device=None):
+        if device is None:
+            device = self.x_mean.device      # follow wherever the module lives
         return self.forward(torch.as_tensor(X, dtype=torch.float32, device=device)).cpu().numpy()
