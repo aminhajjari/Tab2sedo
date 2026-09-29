@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Batch processor for Tab2Vis across all OpenML datasets
+Batch processor for Table2Image-VIF across all OpenML datasets
 Enhanced with Weight Decay 
 """
 
@@ -218,7 +218,7 @@ def create_summary_tables(df, subdirs, run_dir):
     summary_df = df[[
         'dataset', 'num_samples', 'num_features', 'num_classes',
         'best_accuracy', 'best_auc', 'best_epoch'
-    ] + [c for c in ['projection', 'model_input_dim', 'trainable_params'] if c in df.columns]].copy()
+    ]].copy()
     
     # Calculate statistics
     avg_accuracy = summary_df['best_accuracy'].mean()
@@ -365,7 +365,7 @@ def main():
     parser.add_argument('--skip_existing', action='store_true',
                         help='Skip datasets that already have results')
     parser.add_argument('--main_args', type=str, default='',
-                        help='Extra args forwarded to main.py, e.g. "--proj pls --lambda_vif 0.1"')
+                        help='Extra args forwarded to main.py, e.g. "--self_explain --ctx_k 10"')
     
     args = parser.parse_args()
     
