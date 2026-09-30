@@ -1,4 +1,4 @@
-
+#!/usr/bin/env python3
 """
 Batch processor for Table2Image-VIF across all OpenML datasets
 Enhanced with Weight Decay 
@@ -7,7 +7,6 @@ Enhanced with Weight Decay
 import os
 import sys
 import subprocess
-import shlex
 import argparse
 import json
 import time
@@ -80,7 +79,7 @@ def find_datasets(datasets_dir):
 
 
 
-def run_single_dataset(dataset_path, subdirs, script_path, timeout, main_args=None):
+def run_single_dataset(dataset_path, subdirs, script_path, timeout):
     """
     Run Table2Image-VIF on a single dataset
     """
@@ -107,7 +106,7 @@ def run_single_dataset(dataset_path, subdirs, script_path, timeout, main_args=No
         'python', script_path,
         '--data', str(dataset_path),
         '--num_images', num_images,
-    ] + (shlex.split(main_args) if main_args else [])
+    ]
 
     start_time = time.time()
     try:
@@ -364,8 +363,6 @@ def main():
                         help='Timeout per dataset in seconds (default: 2 hours)')
     parser.add_argument('--skip_existing', action='store_true',
                         help='Skip datasets that already have results')
-    parser.add_argument('--main_args', type=str, default='',
-                        help='Extra args forwarded to main.py, e.g. "--self_explain --ctx_k 10"')
     
     args = parser.parse_args()
     
@@ -442,8 +439,7 @@ def main():
             dataset_path=dataset_path,
             subdirs=subdirs,
             script_path=args.script_path,
-            timeout=args.timeout,
-            main_args=args.main_args
+            timeout=args.timeout
         )
         
         results_log.append(result)
