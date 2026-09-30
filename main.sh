@@ -1,19 +1,19 @@
 #!/bin/bash
 
 #=======================================================================
-# PRODUCTION SLURM SCRIPT - 67 Datasets with Weight Decay
+# PRODUCTION SLURM SCRIPT - 80 Datasets with Weight Decay
 #=======================================================================
 
 #SBATCH --account=def-arashmoh
-#SBATCH --job-name=HybKAN_SX
+#SBATCH --job-name=KanV2I
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=h100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=96:00:00
 
-#SBATCH --output=/home/gkianfar/scratch/Amin/Sedo/output/logs/hybkan_sx_%A.out
-#SBATCH --error=/home/gkianfar/scratch/Amin/Sedo/output/logs/hybkan_sx_%A.err
+#SBATCH --output=/home/gkianfar/scratch/Amin/Sedo/output/logs/kanV2Idebug_%A.out
+#SBATCH --error=/home/gkianfar/scratch/Amin/Sedo/output/logs/kanV2Idebug_%A.err
 
 #=======================================================================
 # Configuration
@@ -27,11 +27,7 @@
 
 PROJECT_DIR="/home/gkianfar/scratch/Amin"
 
-# Folder with the HybridKAN variant: main.py, run_all_datasets.py, self_explain.py, kan_hybrid.py
-TAB2SEDO_DIR="$PROJECT_DIR/Sedo/Tab2sedo_hybrid"      # <-- change if you used another folder name
-
-# Options forwarded to main.py (keep the = form below when you use it)
-MAIN_ARGS="--self_explain"
+TAB2SEDO_DIR="$PROJECT_DIR/Sedo/Tab2sedo"
 
 VENV_PATH="/home/gkianfar/scratch/Amin/ICC/venvMsc/bin/activate"
 
@@ -114,13 +110,6 @@ if [ ! -f "$MAIN_SCRIPT" ]; then
     echo "   $MAIN_SCRIPT"
     exit 1
 fi
-
-for f in self_explain.py kan_hybrid.py; do
-    if [ ! -f "$TAB2SEDO_DIR/$f" ]; then
-        echo "❌ ERROR: $f not found in $TAB2SEDO_DIR"
-        exit 1
-    fi
-done
 
 if [ ! -f "$VENV_PATH" ]; then
     echo "❌ ERROR: Virtual environment not found:"
@@ -227,9 +216,7 @@ echo "  --datasets_dir $DATASETS_DIR \\"
 echo "  --output_base $RESULTS_BASE \\"
 echo "  --job_id $SLURM_JOB_ID \\"
 echo "  --script_path $MAIN_SCRIPT \\"
-echo "  --timeout $TIMEOUT_DEFAULT \\"
-echo "  --skip_existing \\"
-echo "  --main_args=\"$MAIN_ARGS\""
+echo "  --timeout $TIMEOUT_DEFAULT"
 
 echo ""
 echo "=========================================="
@@ -246,8 +233,7 @@ python "$BATCH_SCRIPT" \
     --job_id "$SLURM_JOB_ID" \
     --script_path "$MAIN_SCRIPT" \
     --timeout "$TIMEOUT_DEFAULT" \
-    --skip_existing \
-    --main_args="$MAIN_ARGS"
+    --skip_existing
 
 EXIT_CODE=$?
 
