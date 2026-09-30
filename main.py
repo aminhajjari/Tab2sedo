@@ -19,7 +19,6 @@ import os
 import json
 from datetime import datetime
 from kan_hybrid import KAN, HybridKAN
-from self_explain import NeighborhoodContext, KANReasoner, XHybridKAN, explain_batch, build_prompt
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import warnings
 import scipy.io.arff as arff
@@ -34,12 +33,6 @@ parser.add_argument('--save_dir', type=str, required=False, default=None,
                    help='Directory to save results (optional, for compatibility)')
 parser.add_argument('--num_images', type=int, default=20,
                    help='Number of sample images to save (default: 20)')
-# ---- X-Row self-explanation (neighbourhood context + KAN Reasoner) ----
-parser.add_argument('--self_explain', action='store_true',
-                   help='Add kNN context + KAN Reasoner as a third block of the Final KAN')
-parser.add_argument('--ctx_k', type=int, default=10, help='#neighbours for the context graph')
-parser.add_argument('--expl_dim', type=int, default=4, help='Dimension of explanation vector e')
-parser.add_argument('--lambda_faith', type=float, default=0.1, help='Weight of faithfulness loss')
 
 args = parser.parse_args()
 
@@ -321,26 +314,12 @@ X_train, X_test, y_train, y_test = train_test_split(
 )
 print(f"[INFO] Train samples: {len(X_train)}, Test samples: {len(X_test)}")
 
-# ---------- X-Row: neighbourhood context (kNN graph over TRAIN rows, standardised features) ----------
-P_RAW = X_train.shape[1]                     # raw feature columns in the tabular tensor
-D_CTX, D_EXPL, LAMBDA_FAITH = 0, args.expl_dim, args.lambda_faith
-ctx_builder, C_train, C_test = None, None, None
-if args.self_explain:
-    ctx_builder = NeighborhoodContext(k=args.ctx_k).fit(X_train, y_train, num_classes)
-    C_train = ctx_builder.transform(X_train, is_train=True)   # train rows exclude themselves
-    C_test  = ctx_builder.transform(X_test)                   # neighbours = train rows only
-    D_CTX = C_train.shape[1]
-    print(f"[INFO] Self-explain: context dim {D_CTX} ({ctx_builder.names}), e dim {D_EXPL}")
-
-X_train_in = np.hstack([X_train, C_train]) if args.self_explain else X_train
-X_test_in  = np.hstack([X_test,  C_test])  if args.self_explain else X_test
-
 train_tabular_dataset = TensorDataset(
-    torch.tensor(X_train_in, dtype=torch.float32), 
+    torch.tensor(X_train, dtype=torch.float32), 
     torch.tensor(y_train, dtype=torch.long)
 )
 test_tabular_dataset = TensorDataset(
-    torch.tensor(X_test_in, dtype=torch.float32), 
+    torch.tensor(X_test, dtype=torch.float32), 
     torch.tensor(y_test, dtype=torch.long)
 )
 
@@ -540,7 +519,6 @@ class VIFInitialization(nn.Module):
 class CAEWithTabEmbedding(nn.Module):
     def __init__(self, input_dim, tab_latent_size, num_classes, latent_size=8, vif_values=None):
         super(CAEWithTabEmbedding, self).__init__()
-        self.proj = None                 # no input projection in this variant
         self.mlp = KANTabularBranch(input_dim, tab_latent_size, num_classes)
         if vif_values is not None:
             self.vif_model = VIFInitialization(input_dim, vif_values)
@@ -558,14 +536,7 @@ class CAEWithTabEmbedding(nn.Module):
             nn.Sigmoid()
         )
         self.final_classifier = ImageClassifierHead(num_classes=num_classes)  # kept for img-only diagnostic accuracy
-        self.use_ctx = D_CTX > 0
-        self.last_e = self.last_c = self.last_h = None
-        if self.use_ctx:
-            self.reasoner = KANReasoner(D_CTX, D_EXPL, tab_latent_size)
-        HybridCls = XHybridKAN if self.use_ctx else HybridKAN
-        hybrid_extra = {'ctx_dim': D_EXPL} if self.use_ctx else {}
-        self.hybrid = HybridCls(
-            **hybrid_extra,
+        self.hybrid = HybridKAN(
             image_encoder=ImageFeatureEncoder(),
             n_features=input_dim,
             n_outputs=num_classes,
@@ -581,9 +552,6 @@ class CAEWithTabEmbedding(nn.Module):
     def decode(self, z, tab_embedding, vif_embedding):
         return self.decoder(torch.cat([z, tab_embedding, vif_embedding], dim=1))
     def forward(self, x, tab_data):
-        c = None
-        if self.use_ctx:
-            tab_data, c = tab_data[:, :P_RAW], tab_data[:, P_RAW:]   # split raw features | context
         if self.vif_model is not None:
             vif_embedding = self.vif_model(tab_data)
         else:
@@ -593,12 +561,7 @@ class CAEWithTabEmbedding(nn.Module):
         recon_x = self.decode(z, tab_embedding, vif_embedding)
         recon_img = recon_x.view(-1, 1, 28, 28)
         img_pred = self.final_classifier(recon_img)          # unchanged — diagnostic only now
-        if self.use_ctx:
-            e = self.reasoner(c)
-            fused_pred = self.hybrid(tab_data, recon_img, e)  # Final KAN sees [tab | img | e]
-            self.last_e, self.last_c, self.last_h = e, c, tab_embedding
-        else:
-            fused_pred = self.hybrid(tab_data, recon_img)     # HybridKAN: embeddings fused through Final KAN
+        fused_pred = self.hybrid(tab_data, recon_img)         # HybridKAN: embeddings fused through Final KAN
         return recon_x, tab_pred, img_pred, fused_pred, z
 
 print("[INFO] Creating model...")
@@ -649,9 +612,6 @@ def train(model, train_data_loader, optimizer, epoch):
         x_rand = torch.Tensor(random_array).to(DEVICE)
         recon_x, tab_pred, img_pred, fused_pred, z = model(x_rand, tab_data)
         loss = loss_function(recon_x, img_data, tab_pred, tab_label, img_pred, img_label, fused_pred, z)
-        if model.use_ctx and LAMBDA_FAITH > 0:
-            loss = loss + LAMBDA_FAITH * model.reasoner.faithfulness_loss(
-                model.last_e, model.last_c, model.last_h)
         loss.backward()
         train_loss += loss.item()
         optimizer.step()
@@ -980,10 +940,7 @@ print("YOUR MODEL BENCHMARK RESULTS")
 print("="*60)
 
 # Load/save your results history
-RUN_TAG = f"hybrid_sx{args.ctx_k}" if args.self_explain else "hybrid"
-# baseline keeps its original file name; self-explain runs get their own file
-RESULTS_FILE = ("/home/gkianfar/scratch/Amin/Sedo/output/my_model_wins.json" if not args.self_explain
-                else f"/home/gkianfar/scratch/Amin/Sedo/output/my_model_wins_{RUN_TAG}.json")
+RESULTS_FILE = "/home/gkianfar/scratch/Amin/Sedo/output/my_model_wins.json"
 if os.path.exists(RESULTS_FILE):
     with open(RESULTS_FILE, 'r') as f:
         history = json.load(f)
@@ -996,7 +953,6 @@ history.append({
     'auc': round(best_auc, 4),
     'features': n_cont_features,
     'classes': num_classes,
-    'self_explain': bool(args.self_explain),
     'date': datetime.now().strftime("%Y-%m-%d")
 })
 
@@ -1034,50 +990,6 @@ num_saved, save_dir = save_sample_images(
     cae, test_synchronized_loader, file_name, num_classes, NUM_IMAGES_TO_SAVE
 )
 
-# ========== X-Row: per-sample explanations (test set) ==========
-expl_summary = {}
-if cae.use_ctx:
-    cae.eval()
-    feat_names = [str(c_) for c_ in X_df.columns.tolist()]
-    try:
-        class_names = [str(v) for v in le_target.classes_.tolist()]
-    except NameError:
-        class_names = [str(i) for i in range(num_classes)]
-    records, shares = [], []
-    with torch.no_grad():
-        for start in range(0, len(X_test), 256):
-            X_blk = X_test[start:start + 256]
-            xb_ = torch.tensor(X_blk, dtype=torch.float32, device=DEVICE)
-            cb_ = torch.tensor(C_test[start:start + 256], dtype=torch.float32, device=DEVICE)
-            noise = torch.rand(len(xb_), 28 * 28, device=DEVICE)
-            recon_x, *_ = cae(noise, torch.cat([xb_, cb_], 1))       # generated images
-            ex = explain_batch(cae, xb_, recon_x.view(-1, 1, 28, 28), cb_)
-            ex_cpu = {k_: v_.cpu() for k_, v_ in ex.items()}
-            shares.append(ex_cpu['modality_share'])
-            ctx_raw = ctx_builder.transform(X_blk, standardise=False)
-            _, nbr_lab = ctx_builder.neighbours(X_blk, n=3)
-            for i in range(len(xb_)):
-                g = start + i
-                pred_i, true_i = int(ex_cpu['pred'][i]), int(y_test[g])
-                if pred_i != true_i or len(records) < 20:   # all errors + a few correct ones
-                    records.append({
-                        'test_index': g, 'true': class_names[true_i], 'pred': class_names[pred_i],
-                        'prob': float(ex_cpu['prob'][i]),
-                        'modality_share': dict(zip(['tab', 'img', 'ctx'],
-                                                   ex_cpu['modality_share'][i].tolist())),
-                        'context': dict(zip(ctx_builder.names, ctx_raw[i].tolist())),
-                        'nearest_train_labels': [class_names[int(l_)] for l_ in nbr_lab[i]],
-                        'prompt': build_prompt(i, ex_cpu, ctx_raw[i], ctx_builder.names, feat_names,
-                                               X_test[g], class_names, nbr_lab[i]),
-                    })
-    S = torch.cat(shares).mean(0).tolist()
-    expl_summary = {'mean_share_tab': S[0], 'mean_share_img': S[1], 'mean_share_ctx': S[2]}
-    print(f"[INFO] Mean local modality share  tab={S[0]:.3f}  img={S[1]:.3f}  ctx={S[2]:.3f}")
-    expl_path = os.path.join(save_dir, f'explanations_{RUN_TAG}.json')
-    with open(expl_path, 'w') as f:
-        json.dump(records, f, indent=2)
-    print(f"[INFO] Saved {len(records)} per-sample explanations to: {expl_path}")
-
 
 
 
@@ -1095,8 +1007,6 @@ results = {
     'images_dir': save_dir,
     'trainable_params': num_params,  
     'matches_table2': (num_classes == 2 and n_cont_features == 78),  
-    'self_explain': bool(args.self_explain),
-    **expl_summary,
     'timestamp': datetime.now().isoformat()
 }
 # Print JSON result (batch script will capture this)
