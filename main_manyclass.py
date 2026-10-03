@@ -44,21 +44,22 @@ NUM_IMAGES_TO_SAVE = min(args.num_images, 20)  # Cap at 20
 data_path = args.data
 file_name = os.path.basename(os.path.dirname(data_path))
 
-DATASET_ROOT = "/home/gkianfar/scratch/Amin/ICC/Unzippeddata/Image"
 
-# ===== MANY-CLASS (>20) EXTENSION: settings (override with environment variables) =====
-IMAGE_POOL    = os.environ.get("IMAGE_POOL", "medmnist")    # base | cyclic | medmnist
-RUN_TAG       = os.environ.get("RUN_TAG", IMAGE_POOL)        # separates outputs of ablation arms
+# ===== MANY-CLASS (>20) VERSION: MedMNIST images only, own output folder =====
+# (separate from main.py: no FashionMNIST / MNIST, no old Image folder, no old output folder)
 MEDMNIST_ROOT = os.environ.get("MEDMNIST_ROOT", "/home/gkianfar/scratch/Amin/Sedo/MedMNIST")
+OUTPUT_ROOT   = os.environ.get("OUTPUT_ROOT", "/home/gkianfar/scratch/Amin/Sedo/output_manyclass/medmnist")
+POOL_LIMIT    = int(os.environ.get("POOL_LIMIT", 0))         # 0 = all MedMNIST classes as distinct images; 20 = ablation with 20 distinct images
 MAX_FEATURES  = int(os.environ.get("MAX_FEATURES", 1100))    # keep top-variance columns above this (amazon has ~10k)
-assert IMAGE_POOL in ("base", "cyclic", "medmnist"), IMAGE_POOL
+POOL_NAME     = "medmnist" if POOL_LIMIT == 0 else f"medmnist_limit{POOL_LIMIT}"
 # per-dataset switches (keyed by the dataset FOLDER name)
 CAP_PER_CLASS = {"dionis": 100, "aloi": 54}                  # stratified row cap per class; NO_CAP=1 disables
-DROP_COLS_BY_DATASET = {"Bach_Choral_Harmony": [0, 1]}       # id / event-number columns (only if file has no header)
-# order in which MedMNIST sets are appended after FashionMNIST(10)+MNIST(10); loaded only as far as needed
+DROP_COLS_BY_DATASET = {"Bach_Choral_Harmony": [0, 1]}       # id / event-number columns (only if the file has no header)
+# MedMNIST sets are appended in this order (classes numbered from 0); loaded only as far as needed
 MEDMNIST_ORDER = ["pathmnist", "bloodmnist", "dermamnist", "retinamnist",
                   "octmnist", "tissuemnist", "breastmnist", "pneumoniamnist"]
-print(f"[CONFIG] IMAGE_POOL={IMAGE_POOL}  RUN_TAG={RUN_TAG}  MAX_FEATURES={MAX_FEATURES}")
+os.makedirs(OUTPUT_ROOT, exist_ok=True)
+print(f"[CONFIG] pool={POOL_NAME}  MEDMNIST_ROOT={MEDMNIST_ROOT}  OUTPUT_ROOT={OUTPUT_ROOT}  MAX_FEATURES={MAX_FEATURES}")
 #CLIP_MODEL_PATH = "/home/gkianfar/scratch/Amin/ICC/models/ViT-B-32.pt"
 
 
@@ -269,9 +270,6 @@ else:
 num_classes = len(unique_values)
 print(f"[INFO] Detected {num_classes} unique classes: {unique_values}")
 
-if IMAGE_POOL == "base" and num_classes > 20:
-    print(f"[ERROR] Dataset has {num_classes} classes (>20) and IMAGE_POOL=base. Skipping...")
-    exit(1)
 if num_classes < 2:
     raise ValueError(f"Dataset has only {num_classes} class. Need at least 2.")
 
@@ -316,25 +314,7 @@ print(f"  - Class distribution: {dict(zip(*np.unique(y, return_counts=True)))}")
 print(f"  - Tab latent size: {tab_latent_size}")
 print(f"{'='*70}\n")
 
-print("[INFO] Loading FashionMNIST and MNIST datasets...")
-fashionmnist_dataset = datasets.FashionMNIST(
-    root=DATASET_ROOT, train=True, download=False, transform=transforms.ToTensor()
-)
-mnist_dataset = datasets.MNIST(
-    root=DATASET_ROOT, train=True, download=False, transform=transforms.ToTensor()
-)
-
-class ModifiedLabelDataset(Dataset):
-    def __init__(self, dataset, label_offset=10):
-        self.dataset = dataset
-        self.label_offset = label_offset
-    def __len__(self):
-        return len(self.dataset)
-    def __getitem__(self, idx):
-        image, label = self.dataset[idx]
-        return image, label + self.label_offset
-
-modified_mnist_dataset = ModifiedLabelDataset(mnist_dataset, label_offset=10)
+print(f"[INFO] Image pool: MedMNIST 28x28 from {MEDMNIST_ROOT}")
 
 print("[INFO] Standardizing features...")
 scaler = StandardScaler()
@@ -425,46 +405,33 @@ def load_medmnist_train(path):
     return imgs, labs
 
 
-def build_image_pool(fm, mn, mode, n_classes):
-    """Returns (combined_dataset, indices_by_label, pool_size, wrapped).
-    Pool class ids: 0-9 FashionMNIST, 10-19 MNIST, then MedMNIST sets in MEDMNIST_ORDER (mode='medmnist').
-    base/cyclic reuse the 20 FM+MNIST classes as c % 20; medmnist uses distinct classes and wraps (c % pool_size)
-    only when the dataset has more classes than the pool."""
+def build_image_pool(n_classes):
+    """MedMNIST image pool. Returns (combined_dataset, indices_by_label, distinct_image_classes, wrapped).
+    Pool class ids are numbered from 0 in MEDMNIST_ORDER. Dataset class c uses pool class c; when the dataset has more
+    classes than the pool offers, classes wrap (c % distinct) and share images (the log prints a warning).
+    POOL_LIMIT > 0 caps the number of distinct image classes (ablation)."""
+    need = min(n_classes, POOL_LIMIT) if POOL_LIMIT > 0 else n_classes
     parts, tgts, offset = [], [], 0
-    def add(ds, y, n_cls, name):
-        nonlocal offset
-        parts.append(ds); tgts.append(np.asarray(y, dtype=np.int64) + offset)
-        print(f"[POOL] classes {offset:>3}-{offset + n_cls - 1:<3} <- {name}")
-        offset += n_cls
-    add(fm, fm.targets.numpy(), 10, "FashionMNIST")
-    add(mn, mn.targets.numpy(), 10, "MNIST")
-    if mode == "medmnist":
-        for name in MEDMNIST_ORDER:
-            if offset >= n_classes:
-                break
-            path = find_medmnist_npz(MEDMNIST_ROOT, name)
-            imgs, labs = load_medmnist_train(path)
-            n_cls = int(labs.max()) + 1
-            assert len(np.unique(labs)) == n_cls, f"{name}: labels are not 0..{n_cls - 1}"
-            print(f"[POOL] {name}: {path}  images={len(imgs)}")
-            add(ArrayImageDataset(imgs, labs), labs, n_cls, name)
+    for name in MEDMNIST_ORDER:
+        if offset >= need:
+            break
+        path = find_medmnist_npz(MEDMNIST_ROOT, name)
+        imgs, labs = load_medmnist_train(path)
+        n_cls = int(labs.max()) + 1
+        assert len(np.unique(labs)) == n_cls, f"{name}: labels are not 0..{n_cls - 1}"
+        print(f"[POOL] classes {offset:>3}-{offset + n_cls - 1:<3} <- {name}  ({len(imgs)} images)  {path}")
+        parts.append(ArrayImageDataset(imgs, labs)); tgts.append(labs + offset); offset += n_cls
     pool_targets = np.concatenate(tgts)
+    distinct = min(offset, POOL_LIMIT) if POOL_LIMIT > 0 else offset
     by_src = {s: np.where(pool_targets == s)[0].tolist() for s in range(offset)}
-    if mode in ("base", "cyclic"):
-        src_of = lambda c: c % 20
-        wrapped = n_classes > 20
-    else:
-        src_of = lambda c: c % offset
-        wrapped = n_classes > offset
+    wrapped = n_classes > distinct
     if wrapped:
-        print(f"[WARNING] {n_classes} classes > {20 if mode != 'medmnist' else offset} distinct image classes: "
-              f"classes c and c+{20 if mode != 'medmnist' else offset} share images")
-    print(f"[INFO] Image pool={mode}: {offset} distinct image classes loaded, {n_classes} dataset classes mapped")
-    return ConcatDataset(parts), {c: by_src[src_of(c)] for c in range(n_classes)}, offset, wrapped
+        print(f"[WARNING] {n_classes} classes > {distinct} distinct image classes: classes c and c+{distinct} share images")
+    print(f"[INFO] Image pool={POOL_NAME}: {distinct} distinct image classes, {n_classes} dataset classes mapped")
+    return ConcatDataset(parts), {c: by_src[c % distinct] for c in range(n_classes)}, distinct, wrapped
 
 
-combined_dataset, indices_by_label, pool_size, pool_wrapped = build_image_pool(
-    fashionmnist_dataset, mnist_dataset, IMAGE_POOL, num_classes)
+combined_dataset, indices_by_label, pool_size, pool_wrapped = build_image_pool(num_classes)
 valid_labels = sorted(range(num_classes))
 
 repeated_indices = {
@@ -800,7 +767,7 @@ def save_sample_images(model, test_data_loader, dataset_name, num_classes, num_i
     """
     model.eval()
     num_classes = min(num_classes, 20)   # the grid has 2*num_classes rows, so only draw the first 20 classes
-    images_base_dir = f"/home/gkianfar/scratch/Amin/Sedo/output/imageout_{RUN_TAG}"
+    images_base_dir = os.path.join(OUTPUT_ROOT, "imageout")
     images_dir = os.path.join(images_base_dir, dataset_name)
     os.makedirs(images_dir, exist_ok=True)
     
@@ -1042,7 +1009,7 @@ print("YOUR MODEL BENCHMARK RESULTS")
 print("="*60)
 
 # Load/save your results history
-RESULTS_FILE = f"/home/gkianfar/scratch/Amin/Sedo/output/my_model_wins_{RUN_TAG}.json"
+RESULTS_FILE = os.path.join(OUTPUT_ROOT, "my_model_wins.json")
 if os.path.exists(RESULTS_FILE):
     with open(RESULTS_FILE, 'r') as f:
         history = json.load(f)
@@ -1055,7 +1022,7 @@ history.append({
     'auc': round(best_auc, 4),
     'features': n_cont_features,
     'classes': num_classes,
-    'image_pool': IMAGE_POOL,
+    'image_pool': POOL_NAME,
     'pool_classes': pool_size,
     'shared_images': pool_wrapped,
     'date': datetime.now().strftime("%Y-%m-%d")
@@ -1105,7 +1072,7 @@ results = {
     'num_samples': len(X),
     'num_features': n_cont_features,
     'num_classes': num_classes,
-    'image_pool': IMAGE_POOL,
+    'image_pool': POOL_NAME,
     'pool_classes': pool_size,
     'shared_images': pool_wrapped,
     'best_accuracy': best_accuracy,
