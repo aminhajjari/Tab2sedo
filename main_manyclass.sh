@@ -1,0 +1,330 @@
+#!/bin/bash
+
+#=======================================================================
+# SLURM SCRIPT - tabular datasets with MORE THAN 20 CLASSES + MedMNIST images (separate from main.sh)
+#=======================================================================
+
+#SBATCH --account=def-arashmoh
+#SBATCH --job-name=KanManyClass
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=h100:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=96:00:00
+
+#SBATCH --output=/home/gkianfar/scratch/Amin/Sedo/output/logs/manyclass_%A.out
+#SBATCH --error=/home/gkianfar/scratch/Amin/Sedo/output/logs/manyclass_%A.err
+
+#=======================================================================
+# Configuration
+#=======================================================================
+
+
+
+# ============================================================
+# Paths
+# ============================================================
+
+PROJECT_DIR="/home/gkianfar/scratch/Amin"
+
+TAB2SEDO_DIR="$PROJECT_DIR/Sedo/Tab2sedo"
+
+VENV_PATH="/home/gkianfar/scratch/Amin/ICC/venvMsc/bin/activate"
+
+# Tabular datasets (>20 classes only)
+DATASETS_DIR="/home/gkianfar/scratch/Amin/Sedo/Tabular"
+
+# Image datasets (MedMNIST 28x28 .npz folders)
+export MEDMNIST_ROOT="/home/gkianfar/scratch/Amin/Sedo/MedMNIST"
+
+# Optional ablation: POOL_LIMIT=20 sbatch main_manyclass.sh  (only 20 distinct image classes; other classes reuse them)
+export POOL_LIMIT="${POOL_LIMIT:-0}"
+export MAX_FEATURES=1100
+RUN_TAG="medmnist"
+if [ "$POOL_LIMIT" != "0" ]; then RUN_TAG="medmnist_limit${POOL_LIMIT}"; fi
+
+# Results: everything of this run lives in its own folder (nothing is written to the 67-dataset output folder)
+RESULTS_BASE="/home/gkianfar/scratch/Amin/Sedo/output_manyclass/${RUN_TAG}"
+export OUTPUT_ROOT="$RESULTS_BASE"
+JOB_LOGS_DIR="$RESULTS_BASE/logs"
+# Scripts
+MAIN_SCRIPT="$TAB2SEDO_DIR/main_manyclass.py"
+BATCH_SCRIPT="$TAB2SEDO_DIR/run_all_datasets.py"
+
+TIMEOUT_DEFAULT=14400
+#=======================================================================
+# Job Information
+#=======================================================================
+
+echo "=========================================="
+echo "TABLE2IMAGE-VIF PRODUCTION RUN"
+echo "=========================================="
+echo "Job ID: $SLURM_JOB_ID"
+echo "Started: $(date)"
+echo "Node: $(hostname)"
+echo "Datasets dir: $DATASETS_DIR"
+echo "Code dir: $TAB2SEDO_DIR"
+echo "Output dir: $RESULTS_BASE"
+echo "MedMNIST dir: $MEDMNIST_ROOT"
+echo "Pool: $RUN_TAG"
+echo "Configuration:"
+echo "  - Weight Decay: 1e-4 (AdamW)"
+echo "  - Timeout: 4 hours per dataset"
+echo "  - CPUs: 8 cores"
+echo "  - Memory: 64GB"
+echo "=========================================="
+echo ""
+
+
+#=======================================================================
+# GPU Information
+#=======================================================================
+
+echo "GPU Information:"
+nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+echo ""
+
+
+#=======================================================================
+# Setup
+#=======================================================================
+
+echo "Creating directories..."
+
+mkdir -p "$JOB_LOGS_DIR"
+mkdir -p "$RESULTS_BASE"
+
+echo "✅ Directories ready"
+echo ""
+
+
+#=======================================================================
+# Verify Files
+#=======================================================================
+
+echo "Verifying environment..."
+
+if [ ! -d "$MEDMNIST_ROOT" ]; then
+    echo "❌ ERROR: MedMNIST folder not found:"
+    echo "   $MEDMNIST_ROOT"
+    exit 1
+fi
+
+if [ ! -d "$DATASETS_DIR" ]; then
+    echo "❌ ERROR: Datasets not found:"
+    echo "   $DATASETS_DIR"
+    exit 1
+fi
+
+if [ ! -f "$BATCH_SCRIPT" ]; then
+    echo "❌ ERROR: Batch script not found:"
+    echo "   $BATCH_SCRIPT"
+    exit 1
+fi
+
+if [ ! -f "$MAIN_SCRIPT" ]; then
+    echo "❌ ERROR: Main script not found:"
+    echo "   $MAIN_SCRIPT"
+    exit 1
+fi
+
+if [ ! -f "$VENV_PATH" ]; then
+    echo "❌ ERROR: Virtual environment not found:"
+    echo "   $VENV_PATH"
+    exit 1
+fi
+
+DATASET_COUNT=$(find "$DATASETS_DIR" \
+    -mindepth 1 \
+    -maxdepth 1 \
+    -type d | wc -l)
+
+echo "✅ Found $DATASET_COUNT dataset folders"
+echo ""
+
+
+#=======================================================================
+# Load Environment
+#=======================================================================
+
+echo "Loading modules..."
+
+module purge
+module load StdEnv/2023
+module load python/3.11
+module load cuda/12.2
+
+echo "✅ Modules loaded"
+echo ""
+
+
+echo "Activating virtual environment..."
+
+source "$VENV_PATH"
+
+echo "✅ Virtual environment active"
+echo ""
+
+
+#=======================================================================
+# Python Environment Check
+#=======================================================================
+
+echo "Python environment:"
+
+which python
+python --version
+
+python -c "
+import torch
+print(f'PyTorch: {torch.__version__}')
+print(f'CUDA available: {torch.cuda.is_available()}')
+if torch.cuda.is_available():
+    print(f'GPU: {torch.cuda.get_device_name(0)}')
+"
+
+if [ $? -ne 0 ]; then
+    echo "❌ ERROR: Environment check failed!"
+    exit 1
+fi
+
+echo "✅ Environment ready"
+echo ""
+
+
+#=======================================================================
+# Verify Weight Decay in Code
+#=======================================================================
+
+echo "Verifying weight decay configuration..."
+
+if grep -q "weight_decay=1e-4" "$MAIN_SCRIPT"; then
+
+    echo "✅ Weight decay (1e-4) confirmed in main_manyclass.py"
+
+else
+
+    echo "⚠️ WARNING: weight_decay not found in main_manyclass.py"
+    echo "   Make sure it's configured correctly!"
+
+fi
+
+echo ""
+
+
+#=======================================================================
+# Execute Batch Processing
+#=======================================================================
+
+echo "=========================================="
+echo "🚀 STARTING BATCH PROCESSING"
+echo "=========================================="
+
+echo "Using:"
+echo "  Code:     $TAB2SEDO_DIR"
+echo "  Datasets: $DATASETS_DIR"
+echo "  Output:   $RESULTS_BASE"
+echo "  Datasets: $DATASET_COUNT"
+echo ""
+
+echo "Running command:"
+echo "python $BATCH_SCRIPT \\"
+echo "  --datasets_dir $DATASETS_DIR \\"
+echo "  --output_base $RESULTS_BASE \\"
+echo "  --job_id $SLURM_JOB_ID \\"
+echo "  --script_path $MAIN_SCRIPT \\"
+echo "  --timeout $TIMEOUT_DEFAULT"
+
+echo ""
+echo "=========================================="
+echo ""
+
+
+# Run the batch processor
+
+cd "$TAB2SEDO_DIR"
+
+python "$BATCH_SCRIPT" \
+    --datasets_dir "$DATASETS_DIR" \
+    --output_base "$RESULTS_BASE" \
+    --job_id "$SLURM_JOB_ID" \
+    --script_path "$MAIN_SCRIPT" \
+    --timeout "$TIMEOUT_DEFAULT" \
+    --skip_existing
+
+EXIT_CODE=$?
+
+
+#=======================================================================
+# Final Summary
+#=======================================================================
+
+echo ""
+echo "=========================================="
+echo "PRODUCTION RUN COMPLETE"
+echo "=========================================="
+
+echo "Finished: $(date)"
+echo "Exit code: $EXIT_CODE"
+echo ""
+
+
+if [ $EXIT_CODE -eq 0 ]; then
+
+    RESULT_DIR=$(find "$RESULTS_BASE" \
+        -maxdepth 1 \
+        -type d \
+        -name "*_JOB${SLURM_JOB_ID}" | head -1)
+
+    echo "✅ SUCCESS!"
+    echo ""
+
+    echo "📂 Results location:"
+    echo "    $RESULT_DIR/"
+    echo ""
+
+    echo "📊 Files generated:"
+    echo "    ├── csv/"
+    echo "    │   ├── results_summary.csv"
+    echo "    │   ├── results_detailed.csv"
+    echo "    │   └── statistics.csv"
+    echo "    ├── latex/"
+    echo "    │   └── results_latex.txt"
+    echo "    ├── logs/"
+    echo "    │   ├── results.jsonl"
+    echo "    │   └── progress_log.jsonl"
+    echo "    └── README.txt"
+    echo ""
+
+    if [ -f "$RESULT_DIR/csv/statistics.csv" ]; then
+
+        echo "📊 Quick Statistics:"
+
+        grep "Average Accuracy" \
+            "$RESULT_DIR/csv/statistics.csv" | head -1
+
+        grep "Datasets >90%" \
+            "$RESULT_DIR/csv/statistics.csv" | head -1
+
+    fi
+
+    echo ""
+
+    echo "📧 Completion email sent to: aminhajjr@gmail.com"
+
+    echo "🎉 All $DATASET_COUNT datasets processed!"
+
+else
+
+    echo "⚠️ Some datasets may have failed"
+
+    echo ""
+    echo "Check SLURM logs:"
+    echo "    Output: $JOB_LOGS_DIR/production_${SLURM_JOB_ID}.out"
+    echo "    Error:  $JOB_LOGS_DIR/production_${SLURM_JOB_ID}.err"
+
+fi
+
+echo "=========================================="
+
+exit $EXIT_CODE
