@@ -898,7 +898,7 @@ best_epoch = 0
 
 for epoch in range(1, EPOCH + 1):
     train_loss = train(cae, train_synchronized_loader, optimizer, epoch)
-    best_accuracy, best_auc, best_epoch, test_loss, tab_acc, img_acc = test(
+    best_accuracy, best_auc, best_epoch, test_loss, tab_acc, fused_acc  = test(
         cae, test_synchronized_loader, epoch, best_accuracy, best_auc, best_epoch
     )
     
