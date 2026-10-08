@@ -535,7 +535,7 @@ class CAEWithTabEmbedding(nn.Module):
             nn.Linear(128, 28*28),
             nn.Sigmoid()
         )
-        self.final_classifier = ImageClassifierHead(num_classes=num_classes)  # kept for img-only diagnostic accuracy
+        
         self.hybrid = HybridKAN(
             image_encoder=ImageFeatureEncoder(),
             n_features=input_dim,
