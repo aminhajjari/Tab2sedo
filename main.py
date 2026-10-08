@@ -560,9 +560,8 @@ class CAEWithTabEmbedding(nn.Module):
         z = self.encode(x, tab_embedding, vif_embedding)
         recon_x = self.decode(z, tab_embedding, vif_embedding)
         recon_img = recon_x.view(-1, 1, 28, 28)
-        img_pred = self.final_classifier(recon_img)          # unchanged — diagnostic only now
-        fused_pred = self.hybrid(tab_data, recon_img)         # HybridKAN: embeddings fused through Final KAN
-        return recon_x, tab_pred, img_pred, fused_pred, z
+        fused_pred = self.hybrid(tab_data, recon_img)
+        return recon_x, tab_pred, fused_pred, z
 
 print("[INFO] Creating model...")
 cae = CAEWithTabEmbedding(
