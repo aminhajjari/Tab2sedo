@@ -590,13 +590,12 @@ print(f"       Configuration: C={num_classes} classes, N={n_cont_features} featu
 if num_classes == 2 and n_cont_features == 78:
     print(f"       ✓ Matches Table 2 specs (Expected: ~627.6K)")
 #############################################
-def loss_function(recon_x, x, tab_pred, tab_labels, img_pred, img_labels, fused_pred, z, con_weight=0.5):
+def loss_function(recon_x, x, tab_pred, tab_labels, fused_pred, z, con_weight=0.5):
     BCE = F.mse_loss(recon_x, x)
     tab_loss = F.cross_entropy(tab_pred, tab_labels)
-    img_loss = F.cross_entropy(img_pred, img_labels)
     fused_loss = F.cross_entropy(fused_pred, tab_labels)
     con_loss = supcon_loss(z, tab_labels)
-    return BCE + tab_loss + img_loss + fused_loss + con_weight * con_loss
+    return BCE + tab_loss + fused_loss + con_weight * con_loss
 
 def train(model, train_data_loader, optimizer, epoch):
     model.train()
@@ -604,13 +603,12 @@ def train(model, train_data_loader, optimizer, epoch):
     for tab_data, tab_label, img_data, img_label in train_data_loader:
         img_data = img_data.view(-1, 28*28).to(DEVICE)
         tab_data = tab_data.to(DEVICE)
-        img_label = img_label.to(DEVICE).long()
         tab_label = tab_label.to(DEVICE).long()
         optimizer.zero_grad()
         random_array = np.random.rand(img_data.shape[0], 28*28)
         x_rand = torch.Tensor(random_array).to(DEVICE)
-        recon_x, tab_pred, img_pred, fused_pred, z = model(x_rand, tab_data)
-        loss = loss_function(recon_x, img_data, tab_pred, tab_label, img_pred, img_label, fused_pred, z)
+        recon_x, tab_pred, fused_pred, z = model(x_rand, tab_data)
+        loss = loss_function(recon_x, img_data, tab_pred, tab_label, fused_pred, z)
         loss.backward()
         train_loss += loss.item()
         optimizer.step()
@@ -620,42 +618,33 @@ def test(model, test_data_loader, epoch, best_accuracy, best_auc, best_epoch):
     model.eval()
     test_loss = 0
     correct_tab_total = 0
-    correct_img_total = 0
     correct_fused_total = 0
     total = 0
     all_tab_labels, all_tab_preds = [], []
-    all_img_labels, all_img_preds = [], []
     all_fused_preds = []
 
     with torch.no_grad():
         for tab_data, tab_label, img_data, img_label in test_data_loader:
             img_data = img_data.view(-1, 28*28).to(DEVICE)
             tab_data = tab_data.to(DEVICE)
-            img_label = img_label.to(DEVICE).long()
             tab_label = tab_label.to(DEVICE).long()
             random_array = np.random.rand(img_data.shape[0], 28*28)
             x_rand = torch.Tensor(random_array).view(-1, 28*28).to(DEVICE)
-            recon_x, tab_pred, img_pred, fused_pred, z = model(x_rand, tab_data)
-            test_loss += loss_function(recon_x, img_data, tab_pred, tab_label, img_pred, img_label, fused_pred, z).item()
+            recon_x, tab_pred, fused_pred, z = model(x_rand, tab_data)
+            test_loss += loss_function(recon_x, img_data, tab_pred, tab_label, fused_pred, z).item()
             tab_probs = F.softmax(tab_pred, dim=1)
-            img_probs = F.softmax(img_pred, dim=1)
             fused_probs = F.softmax(fused_pred, dim=1)
             all_tab_labels.extend(tab_label.cpu().numpy())
             all_tab_preds.extend(tab_probs.cpu().numpy())
-            all_img_labels.extend(img_label.cpu().numpy())
-            all_img_preds.extend(img_probs.cpu().numpy())
             all_fused_preds.extend(fused_probs.cpu().numpy())
             tab_predicted = torch.argmax(tab_pred, dim=1)
-            img_predicted = torch.argmax(img_pred, dim=1)
             fused_predicted = torch.argmax(fused_pred, dim=1)
             correct_tab_total += (tab_predicted == tab_label).sum().item()
-            correct_img_total += (img_predicted == img_label).sum().item()
             correct_fused_total += (fused_predicted == tab_label).sum().item()
             total += tab_label.size(0)
     
     test_loss /= len(test_data_loader)
     tab_accuracy_total = 100 * correct_tab_total / total
-    img_accuracy_total = 100 * correct_img_total / total
     fused_accuracy_total = 100 * correct_fused_total / total
     
     all_tab_preds_arr = np.array(all_tab_preds)
@@ -724,7 +713,7 @@ def save_sample_images(model, test_data_loader, dataset_name, num_classes, num_i
             # Generate reconstructed images
             random_array = np.random.rand(img_data_flat.shape[0], 28*28)
             x_rand = torch.Tensor(random_array).to(DEVICE)
-            recon_x, _, _, _, _ = model(x_rand, tab_data)
+            recon_x, _, _, _ = model(x_rand, tab_data)
             
             # Store samples by class
             for i in range(len(tab_label)):
