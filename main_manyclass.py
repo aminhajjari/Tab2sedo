@@ -789,8 +789,7 @@ def save_sample_images(model, test_data_loader, dataset_name, num_classes, num_i
             tab_data = tab_data.to(DEVICE)
             
             # Generate reconstructed images
-            random_array = np.random.rand(img_data_flat.shape[0], 28*28)
-            x_rand = torch.Tensor(random_array).to(DEVICE)
+            x_rand = torch.rand(img_data.shape[0], 28*28, device=DEVICE)
             recon_x, _, _, _ = model(x_rand, tab_data)
             
             # Store samples by class
