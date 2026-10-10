@@ -270,10 +270,8 @@ for col in X_df.columns:
 if X_df.shape[1] == 0:
     raise ValueError(f"All features dropped for {file_name} — check dtype handling.")
 
-print(f"[INFO] Imputing missing values with median...")
-imputer = SimpleImputer(strategy='median')
-X = imputer.fit_transform(X_df)
-imputed_count = X_df.isnull().sum().sum()
+X = X_df.values.astype(np.float64)   # NaNs stay in; imputed after the split
+imputed_count = int(np.isnan(X).sum())
 if imputed_count > 0:
     print(f"[INFO] Imputed {imputed_count} missing values")
 
