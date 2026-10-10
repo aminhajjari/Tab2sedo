@@ -296,14 +296,17 @@ if X_df.shape[1] == 0:
     raise ValueError(f"All features dropped for {file_name} — check dtype handling.")
 
 X = X_df.values.astype(np.float64)   # NaNs stay in; imputed after the split
-imputed_count = int(np.isnan(X).sum())
-if imputed_count > 0:
-    print(f"[INFO] Imputed {imputed_count} missing values")
+feature_names = X_df.columns.tolist()
+missing_count = int(np.isnan(X).sum())
+if missing_count > 0:
+    print(f"[INFO] Found {missing_count} missing values (imputed after the split)")
 
 if X.shape[1] > MAX_FEATURES:
-    _keep = np.sort(np.argsort(X.var(axis=0))[-MAX_FEATURES:])
+    _var = np.nan_to_num(np.nanvar(X, axis=0), nan=0.0)
+    _keep = np.sort(np.argsort(_var)[-MAX_FEATURES:])
     print(f"[INFO] {X.shape[1]} features > MAX_FEATURES={MAX_FEATURES}: keeping the {MAX_FEATURES} highest-variance columns (label-free)")
     X = X[:, _keep]
+    feature_names = [feature_names[i] for i in _keep]
 
 unique_values = sorted(set(y))
 num_classes = len(unique_values)
