@@ -696,6 +696,8 @@ def train(model, train_data_loader, optimizer, epoch):
 
 def _auc(labels, probs):
     try:
+        probs = probs.astype(np.float64)
+        probs = probs / probs.sum(axis=1, keepdims=True)
         if not np.isfinite(probs).all():
             return 0.0
         if num_classes == 2:
@@ -706,7 +708,7 @@ def _auc(labels, probs):
         return 0.0
 
 @torch.no_grad()
-def evaluate(model, loader):
+def evaluate(model, loader, with_auc=True):
     model.eval()
     loss_sum, n_tab, n_fused, total = 0.0, 0, 0, 0
     labels, tab_probs, fused_probs = [], [], []
@@ -720,17 +722,21 @@ def evaluate(model, loader):
         n_tab += (tab_pred.argmax(1) == tab_label).sum().item()
         n_fused += (fused_pred.argmax(1) == tab_label).sum().item()
         total += tab_label.size(0)
-        labels.append(tab_label.cpu().numpy())
-        tab_probs.append(F.softmax(tab_pred, dim=1).cpu().numpy())
-        fused_probs.append(F.softmax(fused_pred, dim=1).cpu().numpy())
-    labels = np.concatenate(labels)
-    return {
+        if with_auc:
+            labels.append(tab_label.cpu().numpy())
+            tab_probs.append(F.softmax(tab_pred, dim=1).cpu().numpy())
+            fused_probs.append(F.softmax(fused_pred, dim=1).cpu().numpy())
+    out = {
         'loss': loss_sum / len(loader),
         'tab_acc': 100 * n_tab / total,
         'fused_acc': 100 * n_fused / total,
-        'tab_auc': _auc(labels, np.concatenate(tab_probs)),
-        'fused_auc': _auc(labels, np.concatenate(fused_probs)),
+        'tab_auc': 0.0, 'fused_auc': 0.0,
     }
+    if with_auc:
+        labels = np.concatenate(labels)
+        out['tab_auc'] = _auc(labels, np.concatenate(tab_probs))
+        out['fused_auc'] = _auc(labels, np.concatenate(fused_probs))
+    return out
 
 # ========== IMAGE SAVING FUNCTION ==========
 
