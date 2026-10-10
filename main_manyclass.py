@@ -383,6 +383,8 @@ train_tabular_label_counts = torch.bincount(train_tabular_dataset.tensors[1], mi
 test_tabular_label_counts = torch.bincount(test_tabular_dataset.tensors[1], minlength=num_classes)
 num_samples_needed = train_tabular_label_counts.tolist()
 num_samples_needed_test = test_tabular_label_counts.tolist()
+val_tabular_label_counts = torch.bincount(val_tabular_dataset.tensors[1], minlength=num_classes)
+num_samples_needed_val = val_tabular_label_counts.tolist()
 class ArrayImageDataset(Dataset):
     """28x28 uint8 images held in memory -> float tensor [1,28,28] in [0,1] (same as transforms.ToTensor())."""
     def __init__(self, images, labels):
