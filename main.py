@@ -415,6 +415,8 @@ train_filtered_tab_set = Subset(train_tabular_dataset, [idx[0] for idx in aligne
 train_filtered_img_set = Subset(combined_dataset, [idx[1] for idx in aligned_train_indices])
 test_filtered_tab_set = Subset(test_tabular_dataset, [idx[0] for idx in aligned_test_indices])
 test_filtered_img_set = Subset(combined_dataset, [idx[1] for idx in aligned_test_indices])
+val_filtered_tab_set = Subset(val_tabular_dataset, [idx[0] for idx in aligned_val_indices])
+val_filtered_img_set = Subset(combined_dataset, [idx[1] for idx in aligned_val_indices])
 
 class SynchronizedDataset(Dataset):
     def __init__(self, tabular_dataset, image_dataset):
@@ -431,6 +433,7 @@ class SynchronizedDataset(Dataset):
 
 train_synchronized_dataset = SynchronizedDataset(train_filtered_tab_set, train_filtered_img_set)
 test_synchronized_dataset = SynchronizedDataset(test_filtered_tab_set, test_filtered_img_set)
+val_synchronized_dataset = SynchronizedDataset(val_filtered_tab_set, val_filtered_img_set)
 train_synchronized_loader = DataLoader(train_synchronized_dataset, batch_size=BATCH_SIZE, shuffle=True)
 test_synchronized_loader = DataLoader(test_synchronized_dataset, batch_size=BATCH_SIZE)
 print(f"[INFO] Synchronized datasets created. Train batches: {len(train_synchronized_loader)}")
