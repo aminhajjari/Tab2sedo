@@ -464,19 +464,19 @@ repeated_indices = {
     for label in indices_by_label
 }
 
-aligned_train_indices = []
-aligned_test_indices = []
+aligned_train_indices, aligned_val_indices, aligned_test_indices = [], [], []
 for label in valid_labels:
-    train_tab_indices = np.where(y_train == label)[0].tolist()
-    test_tab_indices = np.where(y_test == label)[0].tolist()
-    train_img_indices = repeated_indices[label][:num_samples_needed[label]]
-    test_img_indices = repeated_indices[label][
-        num_samples_needed[label]:num_samples_needed[label] + num_samples_needed_test[label]
-    ]
-    if len(train_tab_indices) == len(train_img_indices) and \
-       len(test_tab_indices) == len(test_img_indices):
-        aligned_train_indices.extend(list(zip(train_tab_indices, train_img_indices)))
-        aligned_test_indices.extend(list(zip(test_tab_indices, test_img_indices)))
+    train_tab = [i for i, lbl in enumerate(y_train) if lbl == label]
+    val_tab   = [i for i, lbl in enumerate(y_val) if lbl == label]
+    test_tab  = [i for i, lbl in enumerate(y_test) if lbl == label]
+    n_tr, n_va, n_te = num_samples_needed[label], num_samples_needed_val[label], num_samples_needed_test[label]
+    train_img = repeated_indices[label][:n_tr]
+    val_img   = repeated_indices[label][n_tr:n_tr + n_va]
+    test_img  = repeated_indices[label][n_tr + n_va:n_tr + n_va + n_te]
+    if len(train_tab) == len(train_img) and len(val_tab) == len(val_img) and len(test_tab) == len(test_img):
+        aligned_train_indices.extend(zip(train_tab, train_img))
+        aligned_val_indices.extend(zip(val_tab, val_img))
+        aligned_test_indices.extend(zip(test_tab, test_img))
     else:
         raise ValueError(f"Mismatch for label {label}")
 
