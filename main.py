@@ -434,8 +434,11 @@ class SynchronizedDataset(Dataset):
 train_synchronized_dataset = SynchronizedDataset(train_filtered_tab_set, train_filtered_img_set)
 test_synchronized_dataset = SynchronizedDataset(test_filtered_tab_set, test_filtered_img_set)
 val_synchronized_dataset = SynchronizedDataset(val_filtered_tab_set, val_filtered_img_set)
-train_synchronized_loader = DataLoader(train_synchronized_dataset, batch_size=BATCH_SIZE, shuffle=True)
-test_synchronized_loader = DataLoader(test_synchronized_dataset, batch_size=BATCH_SIZE)
+g = torch.Generator()
+g.manual_seed(SEED)
+train_synchronized_loader = DataLoader(train_synchronized_dataset, batch_size=BATCH_SIZE, shuffle=True, generator=g)
+val_synchronized_loader   = DataLoader(val_synchronized_dataset, batch_size=BATCH_SIZE)
+test_synchronized_loader  = DataLoader(test_synchronized_dataset, batch_size=BATCH_SIZE)
 print(f"[INFO] Synchronized datasets created. Train batches: {len(train_synchronized_loader)}")
 
 # ========== MODEL DEFINITIONS ==========
@@ -613,8 +616,7 @@ def train(model, train_data_loader, optimizer, epoch):
         tab_data = tab_data.to(DEVICE)
         tab_label = tab_label.to(DEVICE).long()
         optimizer.zero_grad()
-        random_array = np.random.rand(img_data.shape[0], 28*28)
-        x_rand = torch.Tensor(random_array).to(DEVICE)
+        x_rand = torch.rand(img_data.shape[0], 28*28, device=DEVICE)
         recon_x, tab_pred, fused_pred, z = model(x_rand, tab_data)
         loss = loss_function(recon_x, img_data, tab_pred, tab_label, fused_pred, z)
         loss.backward()
@@ -622,14 +624,43 @@ def train(model, train_data_loader, optimizer, epoch):
         optimizer.step()
     return train_loss / len(train_data_loader)
 
-def test(model, test_data_loader, epoch, best_accuracy, best_auc, best_epoch):
+def _auc(labels, probs):
+    try:
+        if not np.isfinite(probs).all():
+            return 0.0
+        if num_classes == 2:
+            return roc_auc_score(labels, probs[:, 1])
+        return roc_auc_score(labels, probs, multi_class="ovr", average="macro")
+    except Exception as e:
+        print(f"[WARNING] AUC calculation failed: {e}")
+        return 0.0
+
+@torch.no_grad()
+def evaluate(model, loader):
     model.eval()
-    test_loss = 0
-    correct_tab_total = 0
-    correct_fused_total = 0
-    total = 0
-    all_tab_labels, all_tab_preds = [], []
-    all_fused_preds = []
+    loss_sum, n_tab, n_fused, total = 0.0, 0, 0, 0
+    labels, tab_probs, fused_probs = [], [], []
+    for tab_data, tab_label, img_data, img_label in loader:
+        img_data = img_data.view(-1, 28*28).to(DEVICE)
+        tab_data = tab_data.to(DEVICE)
+        tab_label = tab_label.to(DEVICE).long()
+        x_rand = torch.rand(img_data.shape[0], 28*28, device=DEVICE)
+        recon_x, tab_pred, fused_pred, z = model(x_rand, tab_data)
+        loss_sum += loss_function(recon_x, img_data, tab_pred, tab_label, fused_pred, z).item()
+        n_tab += (tab_pred.argmax(1) == tab_label).sum().item()
+        n_fused += (fused_pred.argmax(1) == tab_label).sum().item()
+        total += tab_label.size(0)
+        labels.append(tab_label.cpu().numpy())
+        tab_probs.append(F.softmax(tab_pred, dim=1).cpu().numpy())
+        fused_probs.append(F.softmax(fused_pred, dim=1).cpu().numpy())
+    labels = np.concatenate(labels)
+    return {
+        'loss': loss_sum / len(loader),
+        'tab_acc': 100 * n_tab / total,
+        'fused_acc': 100 * n_fused / total,
+        'tab_auc': _auc(labels, np.concatenate(tab_probs)),
+        'fused_auc': _auc(labels, np.concatenate(fused_probs)),
+    }
 
     with torch.no_grad():
         for tab_data, tab_label, img_data, img_label in test_data_loader:
