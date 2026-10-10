@@ -371,6 +371,8 @@ train_tabular_label_counts = torch.bincount(train_tabular_dataset.tensors[1], mi
 test_tabular_label_counts = torch.bincount(test_tabular_dataset.tensors[1], minlength=num_classes)
 num_samples_needed = train_tabular_label_counts.tolist()
 num_samples_needed_test = test_tabular_label_counts.tolist()
+val_tabular_label_counts = torch.bincount(val_tabular_dataset.tensors[1], minlength=num_classes)
+num_samples_needed_val = val_tabular_label_counts.tolist()
 valid_labels = set(range(num_classes))
 
 filtered_fashion = Subset(fashionmnist_dataset, 
