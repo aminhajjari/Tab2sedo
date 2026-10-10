@@ -960,10 +960,7 @@ for epoch in range(1, EPOCH + 1):
         print(f"[Epoch {epoch:3d}] Train Loss: {train_loss:.4f} | "
               f"Val Loss: {val['loss']:.4f} | Val Fused Acc: {val['fused_acc']:.2f}%")
     
-    if epoch % 10 == 0 or epoch == 1:
-        print(f"[Epoch {epoch:3d}] Train Loss: {train_loss:.4f} | "
-              f"Test Loss: {test_loss:.4f} | "
-              f"Tab Acc: {tab_acc:.2f}% | Fused Acc: {fused_acc:.2f}%")
+
 
 print("\n" + "="*70)
 print("TRAINING COMPLETE")
