@@ -974,7 +974,7 @@ cae.eval()
 with torch.no_grad():
     xb = torch.tensor(X_train[:512], dtype=torch.float32, device=DEVICE)
     scores = cae.mlp.feature_score(xb).cpu().numpy()
-importances = sorted(zip(X_df.columns.tolist(), scores), key=lambda t: t[1], reverse=True)
+importances = sorted(zip(feature_names, scores), key=lambda t: t[1], reverse=True)
 print("Top KAN feature importances:")
 for name, s in importances[:15]:
     print(f"  {name:30s} {s:.4f}")
