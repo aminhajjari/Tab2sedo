@@ -1041,7 +1041,9 @@ results = {
     'images_dir': save_dir,
     'trainable_params': num_params,  
     'matches_table2': (num_classes == 2 and n_cont_features == 78),  
-    'timestamp': datetime.now().isoformat()
+    'timestamp': datetime.now().isoformat(),
+    'best_val_accuracy': best_val_acc,
+    'seed': SEED,
 }
 # Print JSON result (batch script will capture this)
 print("\n" + "="*70)
