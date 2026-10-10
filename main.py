@@ -33,7 +33,7 @@ parser.add_argument('--save_dir', type=str, required=False, default=None,
                    help='Directory to save results (optional, for compatibility)')
 parser.add_argument('--num_images', type=int, default=20,
                    help='Number of sample images to save (default: 20)')
-
+parser.add_argument('--seed', type=int, default=42, help='Random seed')
 args = parser.parse_args()
 
 # ========== PARAMETERS ==========
