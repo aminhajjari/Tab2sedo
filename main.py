@@ -312,15 +312,22 @@ class ModifiedLabelDataset(Dataset):
 
 modified_mnist_dataset = ModifiedLabelDataset(mnist_dataset, label_offset=10)
 
-print("[INFO] Standardizing features...")
-scaler = StandardScaler()
-X = scaler.fit_transform(X)
-
-print("[INFO] Splitting into train/test (80/20)...")
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
+print("[INFO] Splitting into train/val/test...")
+X_trainval, X_test, y_trainval, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=SEED, stratify=y
 )
-print(f"[INFO] Train samples: {len(X_train)}, Test samples: {len(X_test)}")
+val_frac = max(0.1, (num_classes + 1) / len(X_trainval))   # keeps every class in val
+X_train, X_val, y_train, y_val = train_test_split(
+    X_trainval, y_trainval, test_size=val_frac, random_state=SEED, stratify=y_trainval
+)
+
+# fit imputer and scaler on the training split only
+imputer = SimpleImputer(strategy='median', keep_empty_features=True)  # sklearn >= 1.2
+scaler = StandardScaler()
+X_train = scaler.fit_transform(imputer.fit_transform(X_train))
+X_val   = scaler.transform(imputer.transform(X_val))
+X_test  = scaler.transform(imputer.transform(X_test))
+print(f"[INFO] Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
 
 train_tabular_dataset = TensorDataset(
     torch.tensor(X_train, dtype=torch.float32), 
