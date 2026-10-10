@@ -350,6 +350,11 @@ test_tabular_dataset = TensorDataset(
     torch.tensor(y_test, dtype=torch.long)
 )
 
+val_tabular_dataset = TensorDataset(
+    torch.tensor(X_val, dtype=torch.float32),
+    torch.tensor(y_val, dtype=torch.long)
+)
+
 print("[INFO] Calculating VIF values...")
 def calculate_vif_safe(X_data):
     df_vif = pd.DataFrame(X_data)
