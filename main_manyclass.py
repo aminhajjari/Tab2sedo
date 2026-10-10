@@ -691,69 +691,43 @@ def train(model, train_data_loader, optimizer, epoch):
         optimizer.step()
     return train_loss / len(train_data_loader)
 
-def test(model, test_data_loader, epoch, best_accuracy, best_auc, best_epoch):
+def _auc(labels, probs):
+    try:
+        if not np.isfinite(probs).all():
+            return 0.0
+        if num_classes == 2:
+            return roc_auc_score(labels, probs[:, 1])
+        return roc_auc_score(labels, probs, multi_class="ovr", average="macro")
+    except Exception as e:
+        print(f"[WARNING] AUC calculation failed: {e}")
+        return 0.0
+
+@torch.no_grad()
+def evaluate(model, loader):
     model.eval()
-    test_loss = 0
-    correct_tab_total = 0
-    correct_fused_total = 0
-    total = 0
-    all_tab_labels, all_tab_preds = [], []
-    all_fused_preds = []
-
-    with torch.no_grad():
-        for tab_data, tab_label, img_data, img_label in test_data_loader:
-            img_data = img_data.view(-1, 28*28).to(DEVICE)
-            tab_data = tab_data.to(DEVICE)
-            tab_label = tab_label.to(DEVICE).long()
-            random_array = np.random.rand(img_data.shape[0], 28*28)
-            x_rand = torch.Tensor(random_array).view(-1, 28*28).to(DEVICE)
-            recon_x, tab_pred, fused_pred, z = model(x_rand, tab_data)
-            test_loss += loss_function(recon_x, img_data, tab_pred, tab_label, fused_pred, z).item()
-            tab_probs = F.softmax(tab_pred, dim=1)
-            fused_probs = F.softmax(fused_pred, dim=1)
-            all_tab_labels.extend(tab_label.cpu().numpy())
-            all_tab_preds.extend(tab_probs.cpu().numpy())
-            all_fused_preds.extend(fused_probs.cpu().numpy())
-            tab_predicted = torch.argmax(tab_pred, dim=1)
-            fused_predicted = torch.argmax(fused_pred, dim=1)
-            correct_tab_total += (tab_predicted == tab_label).sum().item()
-            correct_fused_total += (fused_predicted == tab_label).sum().item()
-            total += tab_label.size(0)
-    
-    test_loss /= len(test_data_loader)
-    tab_accuracy_total = 100 * correct_tab_total / total
-    fused_accuracy_total = 100 * correct_fused_total / total
-    
-    all_tab_preds_arr = np.array(all_tab_preds)
-    all_fused_preds_arr = np.array(all_fused_preds)
-    all_tab_labels_arr = np.array(all_tab_labels)
-
-    tab_auc, fused_auc = 0.0, 0.0
-    if not (np.isnan(all_tab_preds_arr).any() or np.isinf(all_tab_preds_arr).any()):
-        try:
-            if num_classes == 2:
-                tab_auc = roc_auc_score(all_tab_labels_arr, all_tab_preds_arr[:, 1])
-            else:
-                tab_auc = roc_auc_score(all_tab_labels_arr, all_tab_preds_arr, multi_class="ovr", average="macro")
-        except Exception as e:
-            print(f"[WARNING] Tab AUC calculation failed: {e}")
-
-    if not (np.isnan(all_fused_preds_arr).any() or np.isinf(all_fused_preds_arr).any()):
-        try:
-            if num_classes == 2:
-                fused_auc = roc_auc_score(all_tab_labels_arr, all_fused_preds_arr[:, 1])
-            else:
-                fused_auc = roc_auc_score(all_tab_labels_arr, all_fused_preds_arr, multi_class="ovr", average="macro")
-        except Exception as e:
-            print(f"[WARNING] Fused AUC calculation failed: {e}")
-
-    if fused_accuracy_total > best_accuracy:
-        best_accuracy = fused_accuracy_total
-        best_auc = fused_auc
-        best_epoch = epoch
-        print(f"[INFO] New best accuracy: {best_accuracy:.2f}% (AUC: {fused_auc:.4f}) at epoch {epoch}")
-
-    return best_accuracy, best_auc, best_epoch, test_loss, tab_accuracy_total, fused_accuracy_total
+    loss_sum, n_tab, n_fused, total = 0.0, 0, 0, 0
+    labels, tab_probs, fused_probs = [], [], []
+    for tab_data, tab_label, img_data, img_label in loader:
+        img_data = img_data.view(-1, 28*28).to(DEVICE)
+        tab_data = tab_data.to(DEVICE)
+        tab_label = tab_label.to(DEVICE).long()
+        x_rand = torch.rand(img_data.shape[0], 28*28, device=DEVICE)
+        recon_x, tab_pred, fused_pred, z = model(x_rand, tab_data)
+        loss_sum += loss_function(recon_x, img_data, tab_pred, tab_label, fused_pred, z).item()
+        n_tab += (tab_pred.argmax(1) == tab_label).sum().item()
+        n_fused += (fused_pred.argmax(1) == tab_label).sum().item()
+        total += tab_label.size(0)
+        labels.append(tab_label.cpu().numpy())
+        tab_probs.append(F.softmax(tab_pred, dim=1).cpu().numpy())
+        fused_probs.append(F.softmax(fused_pred, dim=1).cpu().numpy())
+    labels = np.concatenate(labels)
+    return {
+        'loss': loss_sum / len(loader),
+        'tab_acc': 100 * n_tab / total,
+        'fused_acc': 100 * n_fused / total,
+        'tab_auc': _auc(labels, np.concatenate(tab_probs)),
+        'fused_auc': _auc(labels, np.concatenate(fused_probs)),
+    }
 
 # ========== IMAGE SAVING FUNCTION ==========
 
@@ -969,15 +943,22 @@ print("\n" + "="*70)
 print("STARTING TRAINING")
 print("="*70)
 
-best_accuracy = 0
-best_auc = 0
-best_epoch = 0
+best_key = (-1.0, -float('inf'))
+best_val_acc, best_accuracy, best_auc, best_epoch = 0.0, 0.0, 0.0, 0
 
 for epoch in range(1, EPOCH + 1):
     train_loss = train(cae, train_synchronized_loader, optimizer, epoch)
-    best_accuracy, best_auc, best_epoch, test_loss, tab_acc, fused_acc  = test(
-        cae, test_synchronized_loader, epoch, best_accuracy, best_auc, best_epoch
-    )
+    val = evaluate(cae, val_synchronized_loader)
+    key = (val['fused_acc'], -val['loss'])      # val accuracy, ties broken by val loss
+    if key > best_key:
+        best_key, best_epoch, best_val_acc = key, epoch, val['fused_acc']
+        t = evaluate(cae, test_synchronized_loader)   # test is only read, never used to choose
+        best_accuracy, best_auc = t['fused_acc'], t['fused_auc']
+        print(f"[INFO] New best val acc {best_val_acc:.2f}% at epoch {epoch} "
+              f"-> test acc {best_accuracy:.2f}%, AUC {best_auc:.4f}")
+    if epoch % 10 == 0 or epoch == 1:
+        print(f"[Epoch {epoch:3d}] Train Loss: {train_loss:.4f} | "
+              f"Val Loss: {val['loss']:.4f} | Val Fused Acc: {val['fused_acc']:.2f}%")
     
     if epoch % 10 == 0 or epoch == 1:
         print(f"[Epoch {epoch:3d}] Train Loss: {train_loss:.4f} | "
