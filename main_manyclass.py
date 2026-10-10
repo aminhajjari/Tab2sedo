@@ -695,7 +695,6 @@ def test(model, test_data_loader, epoch, best_accuracy, best_auc, best_epoch):
     
     test_loss /= len(test_data_loader)
     tab_accuracy_total = 100 * correct_tab_total / total
-    img_accuracy_total = 100 * correct_img_total / total
     fused_accuracy_total = 100 * correct_fused_total / total
     
     all_tab_preds_arr = np.array(all_tab_preds)
