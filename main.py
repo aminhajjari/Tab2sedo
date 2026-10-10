@@ -390,7 +390,7 @@ for i, (_, label) in enumerate(combined_dataset):
 repeated_indices = {
     label: list(itertools.islice(
         itertools.cycle(indices_by_label[label]),
-        num_samples_needed[label] + num_samples_needed_test[label]
+        num_samples_needed[label] + num_samples_needed_val[label] + num_samples_needed_test[label]
     ))
     for label in indices_by_label
 }
