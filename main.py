@@ -35,7 +35,17 @@ parser.add_argument('--num_images', type=int, default=20,
                    help='Number of sample images to save (default: 20)')
 parser.add_argument('--seed', type=int, default=42, help='Random seed')
 args = parser.parse_args()
+SEED = args.seed
 
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+set_seed(SEED)
 # ========== PARAMETERS ==========
 EPOCH = 50
 BATCH_SIZE = 64
