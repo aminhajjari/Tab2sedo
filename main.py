@@ -931,15 +931,22 @@ print("\n" + "="*70)
 print("STARTING TRAINING")
 print("="*70)
 
-best_accuracy = 0
-best_auc = 0
-best_epoch = 0
+best_key = (-1.0, -float('inf'))
+best_val_acc, best_accuracy, best_auc, best_epoch = 0.0, 0.0, 0.0, 0
 
 for epoch in range(1, EPOCH + 1):
     train_loss = train(cae, train_synchronized_loader, optimizer, epoch)
-    best_accuracy, best_auc, best_epoch, test_loss, tab_acc, fused_acc  = test(
-        cae, test_synchronized_loader, epoch, best_accuracy, best_auc, best_epoch
-    )
+    val = evaluate(cae, val_synchronized_loader)
+    key = (val['fused_acc'], -val['loss'])      # val accuracy, ties broken by val loss
+    if key > best_key:
+        best_key, best_epoch, best_val_acc = key, epoch, val['fused_acc']
+        t = evaluate(cae, test_synchronized_loader)   # test is only read, never used to choose
+        best_accuracy, best_auc = t['fused_acc'], t['fused_auc']
+        print(f"[INFO] New best val acc {best_val_acc:.2f}% at epoch {epoch} "
+              f"-> test acc {best_accuracy:.2f}%, AUC {best_auc:.4f}")
+    if epoch % 10 == 0 or epoch == 1:
+        print(f"[Epoch {epoch:3d}] Train Loss: {train_loss:.4f} | "
+              f"Val Loss: {val['loss']:.4f} | Val Fused Acc: {val['fused_acc']:.2f}%")
     
     if epoch % 10 == 0 or epoch == 1:
         print(f"[Epoch {epoch:3d}] Train Loss: {train_loss:.4f} | "
